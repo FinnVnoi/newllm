@@ -3,7 +3,7 @@
 Cross-platform installers for configuring a custom Codex model provider, model catalog, API key, model, and reasoning effort.
 
 - Windows: `codex_install.ps1` / `codex_uninstall.ps1`
-- Linux and macOS: `codex_install.sh` / `codex_uninstall.sh`
+- Linux and macOS, including Bash, Zsh, and Fish: `codex_install.sh` / `codex_uninstall.sh`
 - Bundled catalog: `legacy_direct_model_catalog.json`
 
 The default values match the repository owner's setup:
@@ -65,7 +65,7 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-The installer updates `~/.codex` and adds a small managed source block to `~/.bashrc`. For another POSIX shell it uses `~/.profile`. Every terminal opened after installation loads the variables automatically.
+The installer updates `~/.codex` and adds a small managed source block to `~/.bashrc`. It uses `~/.zshrc` for Zsh, `~/.config/fish/conf.d/codex-custom-endpoint.fish` for Fish, and `~/.profile` for another POSIX shell. Every terminal opened after installation loads the variables automatically.
 
 Only if you want to keep using the terminal that was already open during installation, run this once:
 
@@ -106,6 +106,14 @@ For unattended Linux or macOS installation:
 export CODEX_API_KEY='your-api-key'
 ./codex_install.sh --non-interactive
 ```
+
+If Codex reports `invalid_api_key`, run:
+
+```bash
+./codex_install.sh --doctor
+```
+
+The diagnostic only reports whether the key is loaded, its character count, whether the current key matches the saved key, and whether the provider config is present. It never prints the key. On Arch Linux with Fish, rerun the latest installer once so it can migrate the managed block from `.profile` to Fish's `conf.d` directory.
 
 ### What the installer changes
 
@@ -183,7 +191,7 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc` để nạp biến môi trường. Với shell POSIX khác, installer dùng `~/.profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
+Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc`. Với Zsh, installer dùng `~/.zshrc`; với Fish, installer dùng `~/.config/fish/conf.d/codex-custom-endpoint.fish`; với shell POSIX khác, installer dùng `~/.profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
 
 Chỉ khi muốn tiếp tục dùng ngay terminal đã mở trong lúc cài, hãy chạy lệnh sau một lần:
 
@@ -224,6 +232,14 @@ Cài đặt không tương tác trên Linux hoặc macOS:
 export CODEX_API_KEY='api-key-cua-ban'
 ./codex_install.sh --non-interactive
 ```
+
+Nếu Codex báo `invalid_api_key`, hãy chạy:
+
+```bash
+./codex_install.sh --doctor
+```
+
+Chế độ chẩn đoán chỉ cho biết key đã được nạp hay chưa, số ký tự của key, key hiện tại có khớp key đã lưu không và provider config có tồn tại không. Nó không bao giờ in giá trị key. Trên Arch Linux dùng Fish, hãy chạy lại installer mới một lần để managed block được chuyển từ `.profile` sang thư mục `conf.d` của Fish.
 
 ### Installer thay đổi những gì
 

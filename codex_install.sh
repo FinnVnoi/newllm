@@ -14,6 +14,7 @@ ENV_FILE_NAME='codex_custom_endpoint.env'
 PROFILE_BEGIN='# >>> codex-custom-endpoint >>>'
 PROFILE_END='# <<< codex-custom-endpoint <<<'
 NON_INTERACTIVE=0
+DOCTOR_MODE=0
 
 die() {
     printf 'Error: %s\n' "$*" >&2
@@ -22,16 +23,20 @@ die() {
 
 usage() {
     printf '%s\n' \
-        'Usage: ./codex_install.sh [--non-interactive]' \
+        'Usage: ./codex_install.sh [--non-interactive | --doctor]' \
         '' \
         'Without arguments, the installer prompts for endpoint, API key, model, and effort.' \
-        '--non-interactive uses the bundled defaults and requires CODEX_API_KEY to be set.'
+        '--non-interactive uses the bundled defaults and requires CODEX_API_KEY to be set.' \
+        '--doctor checks the saved config and API key loading without printing the key.'
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --non-interactive)
             NON_INTERACTIVE=1
+            ;;
+        --doctor)
+            DOCTOR_MODE=1
             ;;
         -h|--help)
             usage
@@ -67,6 +72,9 @@ choose_shell_profile() {
                 printf '%s\n' "$HOME/.bashrc"
             fi
             ;;
+        fish)
+            printf '%s\n' "$HOME/.config/fish/conf.d/codex-custom-endpoint.fish"
+            ;;
         *)
             printf '%s\n' "$HOME/.profile"
             ;;
@@ -100,6 +108,10 @@ shell_quote() {
     printf "'%s'" "$escaped"
 }
 
+trim_api_key() {
+    printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 toml_quote() {
     value="$1"
     value="${value//\\/\\\\}"
@@ -125,7 +137,7 @@ read_with_default() {
 }
 
 read_api_key() {
-    existing_value="$1"
+    existing_value="$(trim_api_key "$1")"
     if [ "$NON_INTERACTIVE" -eq 1 ]; then
         [ -n "$existing_value" ] || die 'CODEX_API_KEY is not set.'
         printf '%s\n' "$existing_value"
@@ -143,11 +155,32 @@ read_api_key() {
     fi
     printf '\n' >&2
 
+    entered_value="$(trim_api_key "$entered_value")"
     if [ -z "$entered_value" ]; then
         [ -n "$existing_value" ] || die 'API key cannot be empty because CODEX_API_KEY is not set.'
         printf '%s\n' "$existing_value"
     else
         printf '%s\n' "$entered_value"
+    fi
+}
+
+remove_shell_profile_block() {
+    profile_path="$1"
+    profile_existed="$2"
+    [ -f "$profile_path" ] || return
+
+    profile_temporary_path="$(mktemp "${TMPDIR:-/tmp}/codex-profile.XXXXXX")"
+    awk -v begin="$PROFILE_BEGIN" -v end="$PROFILE_END" '
+        $0 == begin { skipping = 1; next }
+        $0 == end { skipping = 0; next }
+        !skipping { print }
+    ' "$profile_path" > "$profile_temporary_path"
+
+    if [ "$profile_existed" = '0' ] && ! grep -q '[^[:space:]]' "$profile_temporary_path"; then
+        rm -f "$profile_path" "$profile_temporary_path"
+    else
+        cp "$profile_temporary_path" "$profile_path"
+        rm -f "$profile_temporary_path"
     fi
 }
 
@@ -330,11 +363,24 @@ write_shell_profile_block() {
         : > "$profile_temporary_path"
     fi
 
-    {
-        printf '%s\n' "$PROFILE_BEGIN"
-        printf '[ -f %s ] && . %s\n' "$(shell_quote "$ENV_FILE_PATH")" "$(shell_quote "$ENV_FILE_PATH")"
-        printf '%s\n' "$PROFILE_END"
-    } >> "$profile_temporary_path"
+    case "$SHELL_PROFILE_PATH" in
+        *.fish)
+            {
+                printf '%s\n' "$PROFILE_BEGIN"
+                printf 'if test -f %s\n' "$(shell_quote "$ENV_FILE_PATH")"
+                printf '    source %s\n' "$(shell_quote "$ENV_FILE_PATH")"
+                printf 'end\n'
+                printf '%s\n' "$PROFILE_END"
+            } >> "$profile_temporary_path"
+            ;;
+        *)
+            {
+                printf '%s\n' "$PROFILE_BEGIN"
+                printf '[ -f %s ] && . %s\n' "$(shell_quote "$ENV_FILE_PATH")" "$(shell_quote "$ENV_FILE_PATH")"
+                printf '%s\n' "$PROFILE_END"
+            } >> "$profile_temporary_path"
+            ;;
+    esac
 
     if [ -f "$SHELL_PROFILE_PATH" ]; then
         cp "$profile_temporary_path" "$SHELL_PROFILE_PATH"
@@ -343,6 +389,89 @@ write_shell_profile_block() {
         mv -f "$profile_temporary_path" "$SHELL_PROFILE_PATH"
     fi
 }
+
+run_doctor() {
+    current_api_key="$(trim_api_key "${CODEX_API_KEY:-}")"
+    desired_profile_path="$(choose_shell_profile)"
+    if [ -f "$STATE_PATH" ]; then
+        doctor_profile_path="$(state_get shell_profile_path)"
+    else
+        doctor_profile_path="$desired_profile_path"
+    fi
+
+    printf 'Shell: %s\n' "${SHELL:-unknown}"
+    printf 'Expected shell profile: %s\n' "$doctor_profile_path"
+
+    doctor_ok=1
+    if [ -f "$ENV_FILE_PATH" ]; then
+        saved_api_key="$(
+            unset CODEX_BASE_URL CODEX_API_KEY CODEX_MODEL CODEX_REASONING_EFFORT
+            . "$ENV_FILE_PATH"
+            printf '%s' "${CODEX_API_KEY:-}"
+        )"
+        saved_api_key="$(trim_api_key "$saved_api_key")"
+        printf 'Saved API key: loaded (%s characters; value hidden)\n' "${#saved_api_key}"
+        if [ -z "$saved_api_key" ]; then
+            doctor_ok=0
+        fi
+    else
+        saved_api_key=''
+        printf 'Saved API key: missing environment file\n'
+        doctor_ok=0
+    fi
+
+    if [ -n "$current_api_key" ]; then
+        printf 'Current terminal API key: loaded (%s characters; value hidden)\n' "${#current_api_key}"
+    else
+        printf 'Current terminal API key: not loaded\n'
+        doctor_ok=0
+    fi
+
+    if [ -n "$saved_api_key" ] && [ -n "$current_api_key" ]; then
+        if [ "$saved_api_key" = "$current_api_key" ]; then
+            printf 'Current key matches saved key: yes\n'
+        else
+            printf 'Current key matches saved key: no\n'
+            doctor_ok=0
+        fi
+    fi
+
+    if [ -f "$doctor_profile_path" ] && grep -Fq "$PROFILE_BEGIN" "$doctor_profile_path"; then
+        printf 'Automatic shell loading: configured\n'
+    else
+        printf 'Automatic shell loading: missing\n'
+        doctor_ok=0
+    fi
+    if [ "$doctor_profile_path" != "$desired_profile_path" ]; then
+        printf 'Shell profile migration needed: %s\n' "$desired_profile_path"
+        doctor_ok=0
+    fi
+
+    if [ -f "$CONFIG_PATH" ] &&
+        grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"codex"' "$CONFIG_PATH" &&
+        grep -Eq '^[[:space:]]*env_key[[:space:]]*=[[:space:]]*"CODEX_API_KEY"' "$CONFIG_PATH"; then
+        printf 'Codex provider config: configured\n'
+    else
+        printf 'Codex provider config: missing or inconsistent\n'
+        doctor_ok=0
+    fi
+
+    if [ "$doctor_ok" -eq 1 ]; then
+        printf 'Diagnosis: environment and Codex config are aligned.\n'
+        printf 'If the endpoint still reports invalid_api_key, rerun the installer and enter a valid key instead of keeping the existing one.\n'
+        return 0
+    fi
+
+    printf 'Diagnosis: rerun the installer, then open a new terminal or source %s once.\n' "$(shell_quote "$ENV_FILE_PATH")"
+    return 1
+}
+
+if [ "$DOCTOR_MODE" -eq 1 ]; then
+    if run_doctor; then
+        exit 0
+    fi
+    exit 1
+fi
 
 if [ -f "$BUNDLED_CATALOG_PATH" ]; then
     CATALOG_SOURCE_PATH="$BUNDLED_CATALOG_PATH"
@@ -398,6 +527,18 @@ if [ -f "$STATE_PATH" ]; then
     ENV_FILE_EXISTED="$(state_get env_file_existed)"
     SHELL_PROFILE_EXISTED="$(state_get shell_profile_existed)"
     SHELL_PROFILE_PATH="$(state_get shell_profile_path)"
+    DESIRED_SHELL_PROFILE_PATH="$(choose_shell_profile)"
+    if [ "$SHELL_PROFILE_PATH" != "$DESIRED_SHELL_PROFILE_PATH" ]; then
+        if [ -f "$DESIRED_SHELL_PROFILE_PATH" ] && grep -Fq "$PROFILE_BEGIN" "$DESIRED_SHELL_PROFILE_PATH"; then
+            die "A managed Codex endpoint block already exists in $DESIRED_SHELL_PROFILE_PATH."
+        fi
+        remove_shell_profile_block "$SHELL_PROFILE_PATH" "$SHELL_PROFILE_EXISTED"
+        SHELL_PROFILE_PATH="$DESIRED_SHELL_PROFILE_PATH"
+        SHELL_PROFILE_EXISTED=0
+        if [ -f "$SHELL_PROFILE_PATH" ]; then
+            SHELL_PROFILE_EXISTED=1
+        fi
+    fi
 else
     SHELL_PROFILE_PATH="$(choose_shell_profile)"
     case "$SHELL_PROFILE_PATH" in
@@ -465,6 +606,8 @@ printf 'Config:  %s\n' "$CONFIG_PATH"
 printf 'Catalog: %s\n' "$TARGET_CATALOG_PATH"
 printf 'Environment file: %s\n' "$ENV_FILE_PATH"
 printf 'Shell profile: %s\n' "$SHELL_PROFILE_PATH"
+printf 'API key stored: %s characters (value hidden)\n' "${#API_KEY}"
 printf 'Every new terminal will load these variables automatically.\n'
 printf 'For this already-open terminal only, run once: source %s\n' "$(shell_quote "$ENV_FILE_PATH")"
+printf 'If authentication fails, run: %s --doctor\n' "$(shell_quote "$0")"
 printf 'Restart Codex after loading the new environment.\n'
