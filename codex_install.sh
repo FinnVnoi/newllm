@@ -465,5 +465,6 @@ printf 'Config:  %s\n' "$CONFIG_PATH"
 printf 'Catalog: %s\n' "$TARGET_CATALOG_PATH"
 printf 'Environment file: %s\n' "$ENV_FILE_PATH"
 printf 'Shell profile: %s\n' "$SHELL_PROFILE_PATH"
-printf 'Open a new terminal or run: source %s\n' "$(shell_quote "$ENV_FILE_PATH")"
+printf 'Every new terminal will load these variables automatically.\n'
+printf 'For this already-open terminal only, run once: source %s\n' "$(shell_quote "$ENV_FILE_PATH")"
 printf 'Restart Codex after loading the new environment.\n'

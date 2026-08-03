@@ -18,6 +18,8 @@ The default values match the repository owner's setup:
 
 The API key is never embedded in the scripts or catalog. Pressing Enter at the API key prompt keeps the existing `CODEX_API_KEY`; if it is not already set, an API key must be entered.
 
+Windows saves the variables in the persistent User environment. Linux and macOS automatically load them in every new terminal through the selected shell profile. A running installer process cannot modify the environment of the parent shell that launched it, so the optional `source` command is only needed once for the terminal that was already open during installation.
+
 ## English
 
 ### Download
@@ -63,9 +65,9 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-The installer updates `~/.codex` and adds a small managed source block to `~/.bashrc`. For another POSIX shell it uses `~/.profile`.
+The installer updates `~/.codex` and adds a small managed source block to `~/.bashrc`. For another POSIX shell it uses `~/.profile`. Every terminal opened after installation loads the variables automatically.
 
-Load the variables in the current terminal, or open a new terminal:
+Only if you want to keep using the terminal that was already open during installation, run this once:
 
 ```bash
 source ~/.codex/codex_custom_endpoint.env
@@ -84,9 +86,9 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-The default macOS shell is usually Zsh, so the installer adds its managed source block to `~/.zshrc`. When Bash is the active shell, it uses `~/.bash_profile`.
+The default macOS shell is usually Zsh, so the installer adds its managed source block to `~/.zshrc`. When Bash is the active shell, it uses `~/.bash_profile`. Every terminal opened after installation loads the variables automatically.
 
-Load the variables in the current terminal, or open a new terminal:
+Only if you want to keep using the terminal that was already open during installation, run this once:
 
 ```bash
 source ~/.codex/codex_custom_endpoint.env
@@ -181,9 +183,9 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc` để nạp biến môi trường. Với shell POSIX khác, installer dùng `~/.profile`.
+Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc` để nạp biến môi trường. Với shell POSIX khác, installer dùng `~/.profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
 
-Nạp biến vào terminal hiện tại hoặc mở terminal mới:
+Chỉ khi muốn tiếp tục dùng ngay terminal đã mở trong lúc cài, hãy chạy lệnh sau một lần:
 
 ```bash
 source ~/.codex/codex_custom_endpoint.env
@@ -202,9 +204,9 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-macOS thường dùng Zsh nên installer thêm block vào `~/.zshrc`. Nếu shell hiện tại là Bash, installer dùng `~/.bash_profile`.
+macOS thường dùng Zsh nên installer thêm block vào `~/.zshrc`. Nếu shell hiện tại là Bash, installer dùng `~/.bash_profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
 
-Nạp biến vào terminal hiện tại hoặc mở terminal mới:
+Chỉ khi muốn tiếp tục dùng ngay terminal đã mở trong lúc cài, hãy chạy lệnh sau một lần:
 
 ```bash
 source ~/.codex/codex_custom_endpoint.env
@@ -247,7 +249,7 @@ Các biến môi trường được lưu:
 - `CODEX_MODEL`
 - `CODEX_REASONING_EFFORT`
 
-Windows lưu chúng dưới dạng biến môi trường User. Linux và macOS lưu trong `~/.codex/codex_custom_endpoint.env` với quyền file `600`, sau đó nạp file này từ cấu hình shell đã chọn.
+Windows lưu chúng bền vững dưới dạng biến môi trường User. Linux và macOS lưu trong `~/.codex/codex_custom_endpoint.env` với quyền file `600`, sau đó tự động nạp file này từ cấu hình shell đã chọn cho mọi terminal mới. Tiến trình installer không thể sửa môi trường của shell cha đang chạy, vì vậy lệnh `source` chỉ cần chạy một lần nếu bạn muốn tiếp tục dùng ngay terminal đã mở từ trước khi cài.
 
 Lần cài đầu tiên sẽ sao lưu config, catalog đích, dữ liệu môi trường và trạng thái liên quan. Chạy lại installer không ghi đè bản sao lưu gốc. Khi uninstall, các file ban đầu được phục hồi; nếu file cài đặt đã bị sửa sau đó, uninstall tạo thêm một bản an toàn trước khi phục hồi.
 
