@@ -5,6 +5,10 @@ TARGET_CATALOG_NAME='legacy_direct_model_catalog.json'
 STATE_FILE_NAME='codex_custom_endpoint_unix_state'
 BACKUP_DIRECTORY_NAME='codex_custom_endpoint_unix_backup'
 ENV_FILE_NAME='codex_custom_endpoint.env'
+QUOTA_PROXY_NAME='codex_quota_proxy.py'
+QUOTA_LAUNCHER_NAME='codex_quota_proxy_start.sh'
+QUOTA_DESKTOP_NAME='codex-quota-proxy.desktop'
+QUOTA_LAUNCH_AGENT_NAME='com.finnvnoi.codex-quota-proxy.plist'
 PROFILE_BEGIN='# >>> codex-custom-endpoint >>>'
 PROFILE_END='# <<< codex-custom-endpoint <<<'
 
@@ -19,6 +23,13 @@ TARGET_CATALOG_PATH="$CODEX_HOME_PATH/$TARGET_CATALOG_NAME"
 STATE_PATH="$CODEX_HOME_PATH/$STATE_FILE_NAME"
 BACKUP_DIRECTORY="$CODEX_HOME_PATH/$BACKUP_DIRECTORY_NAME"
 ENV_FILE_PATH="$CODEX_HOME_PATH/$ENV_FILE_NAME"
+TARGET_QUOTA_PROXY_PATH="$CODEX_HOME_PATH/$QUOTA_PROXY_NAME"
+QUOTA_LAUNCHER_PATH="$CODEX_HOME_PATH/$QUOTA_LAUNCHER_NAME"
+if [ "$(uname -s)" = 'Darwin' ]; then
+    DEFAULT_QUOTA_AUTOSTART_PATH="$HOME/Library/LaunchAgents/$QUOTA_LAUNCH_AGENT_NAME"
+else
+    DEFAULT_QUOTA_AUTOSTART_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$QUOTA_DESKTOP_NAME"
+fi
 
 state_get() {
     key="$1"
@@ -58,7 +69,7 @@ save_changed_file() {
 remove_profile_block() {
     profile_path="$1"
     profile_existed="$2"
-    [ -f "$profile_path" ] || return
+    [ -f "$profile_path" ] || return 0
 
     profile_temporary_path="$(mktemp "${TMPDIR:-/tmp}/codex-profile.XXXXXX")"
     awk -v begin="$PROFILE_BEGIN" -v end="$PROFILE_END" '
@@ -80,7 +91,9 @@ if [ ! -f "$STATE_PATH" ]; then
     exit 0
 fi
 
-[ "$(state_get schema_version)" = '1' ] || die "Unsupported install state: $STATE_PATH"
+STATE_SCHEMA_VERSION="$(state_get schema_version)"
+[ "$STATE_SCHEMA_VERSION" = '1' ] || [ "$STATE_SCHEMA_VERSION" = '2' ] ||
+    die "Unsupported install state: $STATE_PATH"
 [ "$BACKUP_DIRECTORY" = "$CODEX_HOME_PATH/$BACKUP_DIRECTORY_NAME" ] || die 'Invalid backup directory.'
 [ -d "$BACKUP_DIRECTORY" ] || die "Backup directory not found: $BACKUP_DIRECTORY"
 
@@ -92,10 +105,38 @@ SHELL_PROFILE_PATH="$(state_get shell_profile_path)"
 INSTALLED_CONFIG_SHA256="$(state_get installed_config_sha256)"
 INSTALLED_CATALOG_SHA256="$(state_get installed_catalog_sha256)"
 INSTALLED_ENV_SHA256="$(state_get installed_env_sha256)"
+if [ "$STATE_SCHEMA_VERSION" = '2' ]; then
+    QUOTA_PROXY_EXISTED="$(state_get quota_proxy_existed)"
+    QUOTA_LAUNCHER_EXISTED="$(state_get quota_launcher_existed)"
+    QUOTA_AUTOSTART_EXISTED="$(state_get quota_autostart_existed)"
+    QUOTA_AUTOSTART_PATH="$(state_get quota_autostart_path)"
+    INSTALLED_QUOTA_PROXY_SHA256="$(state_get installed_quota_proxy_sha256)"
+    INSTALLED_QUOTA_LAUNCHER_SHA256="$(state_get installed_quota_launcher_sha256)"
+    INSTALLED_QUOTA_AUTOSTART_SHA256="$(state_get installed_quota_autostart_sha256)"
+else
+    QUOTA_PROXY_EXISTED=0
+    QUOTA_LAUNCHER_EXISTED=0
+    QUOTA_AUTOSTART_EXISTED=0
+    QUOTA_AUTOSTART_PATH="$DEFAULT_QUOTA_AUTOSTART_PATH"
+    INSTALLED_QUOTA_PROXY_SHA256=''
+    INSTALLED_QUOTA_LAUNCHER_SHA256=''
+    INSTALLED_QUOTA_AUTOSTART_SHA256=''
+fi
+
+case "$QUOTA_AUTOSTART_PATH" in
+    "$HOME/"*|"$HOME")
+        ;;
+    *)
+        die 'Invalid quota autostart path.'
+        ;;
+esac
 
 [ "$CONFIG_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/config.toml.original" ] || die 'Original config backup is missing.'
 [ "$CATALOG_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/$TARGET_CATALOG_NAME.original" ] || die 'Original catalog backup is missing.'
 [ "$ENV_FILE_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/$ENV_FILE_NAME.original" ] || die 'Original environment backup is missing.'
+[ "$QUOTA_PROXY_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/$QUOTA_PROXY_NAME.original" ] || die 'Original quota proxy backup is missing.'
+[ "$QUOTA_LAUNCHER_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/$QUOTA_LAUNCHER_NAME.original" ] || die 'Original quota launcher backup is missing.'
+[ "$QUOTA_AUTOSTART_EXISTED" = '0' ] || [ -f "$BACKUP_DIRECTORY/$(basename "$QUOTA_AUTOSTART_PATH").original" ] || die 'Original quota autostart backup is missing.'
 
 SAFETY_COPIES=''
 if [ -f "$CONFIG_PATH" ] && [ -n "$INSTALLED_CONFIG_SHA256" ] && [ "$(sha256_file "$CONFIG_PATH")" != "$INSTALLED_CONFIG_SHA256" ]; then
@@ -106,6 +147,19 @@ if [ -f "$TARGET_CATALOG_PATH" ] && [ -n "$INSTALLED_CATALOG_SHA256" ] && [ "$(s
 fi
 if [ -f "$ENV_FILE_PATH" ] && [ -n "$INSTALLED_ENV_SHA256" ] && [ "$(sha256_file "$ENV_FILE_PATH")" != "$INSTALLED_ENV_SHA256" ]; then
     SAFETY_COPIES="$SAFETY_COPIES$(save_changed_file "$ENV_FILE_PATH" 'environment_changed')"$'\n'
+fi
+if [ -f "$TARGET_QUOTA_PROXY_PATH" ] && [ -n "$INSTALLED_QUOTA_PROXY_SHA256" ] && [ "$(sha256_file "$TARGET_QUOTA_PROXY_PATH")" != "$INSTALLED_QUOTA_PROXY_SHA256" ]; then
+    SAFETY_COPIES="$SAFETY_COPIES$(save_changed_file "$TARGET_QUOTA_PROXY_PATH" 'quota_proxy_changed')"$'\n'
+fi
+if [ -f "$QUOTA_LAUNCHER_PATH" ] && [ -n "$INSTALLED_QUOTA_LAUNCHER_SHA256" ] && [ "$(sha256_file "$QUOTA_LAUNCHER_PATH")" != "$INSTALLED_QUOTA_LAUNCHER_SHA256" ]; then
+    SAFETY_COPIES="$SAFETY_COPIES$(save_changed_file "$QUOTA_LAUNCHER_PATH" 'quota_launcher_changed')"$'\n'
+fi
+if [ -f "$QUOTA_AUTOSTART_PATH" ] && [ -n "$INSTALLED_QUOTA_AUTOSTART_SHA256" ] && [ "$(sha256_file "$QUOTA_AUTOSTART_PATH")" != "$INSTALLED_QUOTA_AUTOSTART_SHA256" ]; then
+    SAFETY_COPIES="$SAFETY_COPIES$(save_changed_file "$QUOTA_AUTOSTART_PATH" 'quota_autostart_changed')"$'\n'
+fi
+
+if [ -f "$QUOTA_LAUNCHER_PATH" ]; then
+    "$QUOTA_LAUNCHER_PATH" --stop >/dev/null 2>&1 || true
 fi
 
 if [ "$CONFIG_EXISTED" = '1' ]; then
@@ -124,6 +178,25 @@ if [ "$ENV_FILE_EXISTED" = '1' ]; then
     cp -p "$BACKUP_DIRECTORY/$ENV_FILE_NAME.original" "$ENV_FILE_PATH"
 else
     rm -f "$ENV_FILE_PATH"
+fi
+
+if [ "$QUOTA_PROXY_EXISTED" = '1' ]; then
+    cp -p "$BACKUP_DIRECTORY/$QUOTA_PROXY_NAME.original" "$TARGET_QUOTA_PROXY_PATH"
+else
+    rm -f "$TARGET_QUOTA_PROXY_PATH"
+fi
+
+if [ "$QUOTA_LAUNCHER_EXISTED" = '1' ]; then
+    cp -p "$BACKUP_DIRECTORY/$QUOTA_LAUNCHER_NAME.original" "$QUOTA_LAUNCHER_PATH"
+else
+    rm -f "$QUOTA_LAUNCHER_PATH"
+fi
+
+if [ "$QUOTA_AUTOSTART_EXISTED" = '1' ]; then
+    mkdir -p "$(dirname "$QUOTA_AUTOSTART_PATH")"
+    cp -p "$BACKUP_DIRECTORY/$(basename "$QUOTA_AUTOSTART_PATH").original" "$QUOTA_AUTOSTART_PATH"
+else
+    rm -f "$QUOTA_AUTOSTART_PATH"
 fi
 
 remove_profile_block "$SHELL_PROFILE_PATH" "$SHELL_PROFILE_EXISTED"

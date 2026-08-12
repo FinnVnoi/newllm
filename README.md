@@ -1,153 +1,178 @@
 # Codex custom endpoint installer
 
-Cross-platform installers for configuring a custom Codex model provider, model catalog, API key, model, and reasoning effort.
+Cross-platform installers for configuring Codex CLI and Codex App with a custom Responses API endpoint, model catalog, API key, model, reasoning effort, and optional native quota display.
 
 - Windows: `codex_install.ps1` / `codex_uninstall.ps1`
-- Linux and macOS, including Bash, Zsh, and Fish: `codex_install.sh` / `codex_uninstall.sh`
-- Bundled catalog: `legacy_direct_model_catalog.json`
+- Linux and macOS: `codex_install.sh` / `codex_uninstall.sh`
+- Bundled model catalog: `legacy_direct_model_catalog.json`
+- Quota bridge: `codex_quota_proxy.py`
 
-The default values match the repository owner's setup:
+Default values:
 
 | Setting | Default |
 | --- | --- |
 | Endpoint | `https://codex.finnvnoi.top/backend-api/codex` |
 | Model | `gpt-5.6-sol` |
 | Reasoning effort | `xhigh` |
-| Provider | `codex` |
+| Show quota | `Yes` |
+| Quota endpoint | `https://codex.finnvnoi.top/v1/usage` |
 | API key variable | `CODEX_API_KEY` |
 
-The API key is never embedded in the scripts or catalog. Pressing Enter at the API key prompt keeps the existing `CODEX_API_KEY`; if it is not already set, an API key must be entered.
-
-Windows saves the variables in the persistent User environment. Linux and macOS automatically load them in every new terminal through the selected shell profile. A running installer process cannot modify the environment of the parent shell that launched it, so the optional `source` command is only needed once for the terminal that was already open during installation.
+The installer never contains a built-in API key. The key is entered interactively or read from an existing `CODEX_API_KEY`.
 
 ## English
 
-### Download
+### Install
 
 ```bash
 git clone https://github.com/FinnVnoi/newllm.git
 cd newllm
 ```
 
-SSH users can clone with:
+SSH:
 
 ```bash
 git clone git@github.com:FinnVnoi/newllm.git
 cd newllm
 ```
 
-### Windows
-
-Run PowerShell in the repository directory:
+Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-The installer prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt.
+Linux or macOS:
 
-Uninstall and restore the original state:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\codex_uninstall.ps1
+```bash
+chmod +x codex_install.sh codex_uninstall.sh
+./codex_install.sh
 ```
 
-For unattended installation, set `CODEX_API_KEY` first and run:
+The installer asks for:
+
+1. Model endpoint.
+2. API key.
+3. Model.
+4. Reasoning effort.
+5. `Show quota in Codex CLI and Codex App [Y/n]`.
+6. Quota endpoint when quota is enabled.
+
+Press Enter to use the displayed defaults. The default quota endpoint is derived from the model endpoint's origin and uses `/v1/usage`.
+
+Non-interactive mode uses all repository defaults and enables quota:
 
 ```powershell
+$env:CODEX_API_KEY = 'your-api-key'
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -NonInteractive
 ```
-
-### Linux
-
-```bash
-chmod +x codex_install.sh codex_uninstall.sh
-./codex_install.sh
-```
-
-The installer updates `~/.codex` and adds a small managed source block to `~/.bashrc`. It uses `~/.zshrc` for Zsh, `~/.config/fish/conf.d/codex-custom-endpoint.fish` for Fish, and `~/.profile` for another POSIX shell. Every terminal opened after installation loads the variables automatically.
-
-Only if you want to keep using the terminal that was already open during installation, run this once:
-
-```bash
-source ~/.codex/codex_custom_endpoint.env
-```
-
-Uninstall:
-
-```bash
-./codex_uninstall.sh
-```
-
-### macOS
-
-```bash
-chmod +x codex_install.sh codex_uninstall.sh
-./codex_install.sh
-```
-
-The default macOS shell is usually Zsh, so the installer adds its managed source block to `~/.zshrc`. When Bash is the active shell, it uses `~/.bash_profile`. Every terminal opened after installation loads the variables automatically.
-
-Only if you want to keep using the terminal that was already open during installation, run this once:
-
-```bash
-source ~/.codex/codex_custom_endpoint.env
-```
-
-Uninstall:
-
-```bash
-./codex_uninstall.sh
-```
-
-For unattended Linux or macOS installation:
 
 ```bash
 export CODEX_API_KEY='your-api-key'
 ./codex_install.sh --non-interactive
 ```
 
-If Codex reports `invalid_api_key`, run:
+### Native quota display
 
-```bash
-./codex_install.sh --doctor
-```
+When `Show quota` is enabled, the installer starts a small local proxy on `127.0.0.1`. It:
 
-The diagnostic only reports whether the key is loaded, its character count, whether the current key matches the saved key, and whether the provider config is present. It never prints the key. On Arch Linux with Fish, rerun the latest installer once so it can migrate the managed block from `.profile` to Fish's `conf.d` directory.
+- forwards Codex requests to the configured remote endpoint;
+- authenticates `/v1/usage` with the same API key;
+- converts API-key limits into native `x-codex-*` response headers;
+- makes the limits available to both Codex CLI and Codex App;
+- never listens on an external network interface.
 
-### What the installer changes
+The API key is not used as the localhost credential. Codex receives a separate random local token, and the proxy replaces it with the real API key only when forwarding to the remote server.
 
-The installer configures these user-level Codex values:
+The generated provider also uses `name = "openai"` and `requires_openai_auth = true` for current Codex App and remote-compaction compatibility. Codex App may still ask for the normal Codex/OpenAI sign-in to initialize its account UI, but requests to the custom endpoint use the configured custom API key. WebSocket transport is disabled because the quota bridge uses HTTP/SSE.
+
+For the sample codex-lb response:
+
+- an API-key `lifetime` limit is shown as the primary `usage` limit;
+- the upstream `7d` limit is shown as the `weekly` limit;
+- `account_pool_usage` is used as a 5h/weekly fallback when detailed upstream limits are hidden;
+- a year-9999 lifetime reset is treated as no reset time.
+
+If your existing `[tui]` configuration has no `status_line`, the installer adds:
 
 ```toml
-model = "gpt-5.6-sol"
-model_provider = "codex"
-model_reasoning_effort = "xhigh"
-model_catalog_json = "/absolute/path/to/.codex/legacy_direct_model_catalog.json"
-
-[model_providers.codex]
-name = "CODEX"
-base_url = "https://codex.finnvnoi.top/backend-api/codex"
-env_key = "CODEX_API_KEY"
-wire_api = "responses"
+[tui]
+status_line = ["model-with-reasoning", "five-hour-limit", "weekly-limit"]
 ```
 
-It also persists:
+If you already configured `tui.status_line`, it is preserved. You can add `five-hour-limit` and `weekly-limit` manually if they are not present.
+
+Quota is refreshed every 15 seconds. A temporary quota API failure does not interrupt model requests; the proxy continues forwarding normally and keeps the last valid quota snapshot.
+
+### Startup behavior
+
+The quota proxy starts immediately during installation and automatically after user login:
+
+- Windows: user Startup folder;
+- Linux desktop: XDG autostart;
+- macOS: user LaunchAgent;
+- Linux/macOS shells also run an idempotent startup check from the managed shell profile.
+
+Python 3.8 or newer is required only when quota display is enabled.
+
+### Persistent environment
+
+Windows stores these variables in the persistent User environment:
 
 - `CODEX_BASE_URL`
 - `CODEX_API_KEY`
 - `CODEX_MODEL`
 - `CODEX_REASONING_EFFORT`
 
-Windows stores them as User environment variables. Linux and macOS store them in `~/.codex/codex_custom_endpoint.env` with file mode `600`, then source that file from the selected shell profile.
+When quota is enabled, Windows also stores the proxy endpoint, quota endpoint, localhost token, host, and port in the persistent User environment so Codex App and the Startup launcher work after a new sign-in.
 
-The first installation backs up the original config, target catalog, environment data, and related state. Re-running the installer keeps the original backup. Uninstall restores the original files and preserves a safety copy if an installed file was changed afterward.
+Linux and macOS store the main variables in `~/.codex/codex_custom_endpoint.env` with mode `600`. Bash, Zsh, and other POSIX shells load that file automatically. Fish receives equivalent `set -gx` commands in `~/.config/fish/conf.d/codex-custom-endpoint.fish` with mode `600`, avoiding the POSIX `export` syntax that caused `invalid_api_key` on Fish/Arch Linux.
 
-Restart Codex after installing or uninstalling.
+New terminals load them automatically. To update the terminal that was already open during installation, run once.
+
+Bash/Zsh/POSIX:
+
+```bash
+source ~/.codex/codex_custom_endpoint.env
+```
+
+Fish:
+
+```fish
+source ~/.config/fish/conf.d/codex-custom-endpoint.fish
+```
+
+Restart Codex CLI or Codex App after installation.
+
+### Diagnose
+
+Linux/macOS:
+
+```bash
+./codex_install.sh --doctor
+```
+
+The diagnostic does not print the API key. It checks the persisted environment, shell integration, provider configuration, and quota proxy when enabled.
+
+### Uninstall
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\codex_uninstall.ps1
+```
+
+Linux/macOS:
+
+```bash
+./codex_uninstall.sh
+```
+
+Uninstall stops the quota proxy, removes its autostart entry, restores the original Codex files and environment, and keeps a safety copy of managed files modified after installation.
 
 ## Tiếng Việt
 
-### Tải repository
+### Cài đặt
 
 ```bash
 git clone https://github.com/FinnVnoi/newllm.git
@@ -161,112 +186,136 @@ git clone git@github.com:FinnVnoi/newllm.git
 cd newllm
 ```
 
-### Windows
-
-Mở PowerShell tại thư mục repository và chạy:
+Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-Installer sẽ yêu cầu nhập endpoint, API key, model và reasoning effort. Nhấn Enter để dùng giá trị mặc định hiển thị trên màn hình.
+Linux hoặc macOS:
 
-Gỡ cài đặt và khôi phục trạng thái ban đầu:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\codex_uninstall.ps1
+```bash
+chmod +x codex_install.sh codex_uninstall.sh
+./codex_install.sh
 ```
 
-Cài đặt không tương tác:
+Installer sẽ hỏi:
+
+1. Endpoint model.
+2. API key.
+3. Model.
+4. Reasoning effort.
+5. `Show quota in Codex CLI and Codex App [Y/n]`.
+6. Endpoint quota nếu bật quota.
+
+Nhấn Enter để dùng giá trị mặc định đang hiển thị. Endpoint quota mặc định được suy ra từ origin của endpoint model và dùng đường dẫn `/v1/usage`.
+
+Cài đặt không tương tác sẽ dùng toàn bộ giá trị mặc định và bật quota:
 
 ```powershell
 $env:CODEX_API_KEY = 'api-key-cua-ban'
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -NonInteractive
 ```
 
-### Linux
-
-```bash
-chmod +x codex_install.sh codex_uninstall.sh
-./codex_install.sh
-```
-
-Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc`. Với Zsh, installer dùng `~/.zshrc`; với Fish, installer dùng `~/.config/fish/conf.d/codex-custom-endpoint.fish`; với shell POSIX khác, installer dùng `~/.profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
-
-Chỉ khi muốn tiếp tục dùng ngay terminal đã mở trong lúc cài, hãy chạy lệnh sau một lần:
-
-```bash
-source ~/.codex/codex_custom_endpoint.env
-```
-
-Gỡ cài đặt:
-
-```bash
-./codex_uninstall.sh
-```
-
-### macOS
-
-```bash
-chmod +x codex_install.sh codex_uninstall.sh
-./codex_install.sh
-```
-
-macOS thường dùng Zsh nên installer thêm block vào `~/.zshrc`. Nếu shell hiện tại là Bash, installer dùng `~/.bash_profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
-
-Chỉ khi muốn tiếp tục dùng ngay terminal đã mở trong lúc cài, hãy chạy lệnh sau một lần:
-
-```bash
-source ~/.codex/codex_custom_endpoint.env
-```
-
-Gỡ cài đặt:
-
-```bash
-./codex_uninstall.sh
-```
-
-Cài đặt không tương tác trên Linux hoặc macOS:
-
 ```bash
 export CODEX_API_KEY='api-key-cua-ban'
 ./codex_install.sh --non-interactive
 ```
 
-Nếu Codex báo `invalid_api_key`, hãy chạy:
+### Hiển thị quota trực tiếp
 
-```bash
-./codex_install.sh --doctor
-```
+Khi chọn bật `Show quota`, installer chạy một proxy nhỏ chỉ lắng nghe tại `127.0.0.1`. Proxy này:
 
-Chế độ chẩn đoán chỉ cho biết key đã được nạp hay chưa, số ký tự của key, key hiện tại có khớp key đã lưu không và provider config có tồn tại không. Nó không bao giờ in giá trị key. Trên Arch Linux dùng Fish, hãy chạy lại installer mới một lần để managed block được chuyển từ `.profile` sang thư mục `conf.d` của Fish.
+- chuyển tiếp request của Codex tới endpoint thật;
+- gọi `/v1/usage` bằng chính API key đã nhập;
+- chuyển quota thành các header `x-codex-*` mà Codex hiểu;
+- cung cấp quota cho cả Codex CLI và Codex App;
+- không mở cổng ra mạng bên ngoài.
 
-### Installer thay đổi những gì
+API key thật không được dùng làm mật khẩu localhost. Codex chỉ nhận một token nội bộ ngẫu nhiên; proxy thay token đó bằng API key thật khi chuyển request tới server.
 
-Installer cập nhật cấu hình Codex ở cấp người dùng:
+Provider được tạo với `name = "openai"` và `requires_openai_auth = true` để tương thích với Codex App hiện tại và remote compaction. Codex App vẫn có thể yêu cầu đăng nhập Codex/OpenAI thông thường để khởi tạo giao diện tài khoản, nhưng request tới endpoint tùy chỉnh sẽ dùng API key tùy chỉnh đã cấu hình. WebSocket bị tắt vì cầu nối quota dùng HTTP/SSE.
+
+Với JSON codex-lb mẫu:
+
+- quota API key `lifetime` hiện thành giới hạn chính `usage`;
+- quota upstream `7d` hiện thành giới hạn `weekly`;
+- `account_pool_usage` được dùng làm fallback 5h/weekly khi chi tiết upstream limit bị ẩn;
+- thời gian reset năm 9999 được coi là không reset.
+
+Nếu cấu hình `[tui]` hiện tại chưa có `status_line`, installer thêm:
 
 ```toml
-model = "gpt-5.6-sol"
-model_provider = "codex"
-model_reasoning_effort = "xhigh"
-model_catalog_json = "/duong-dan-tuyet-doi/.codex/legacy_direct_model_catalog.json"
-
-[model_providers.codex]
-name = "CODEX"
-base_url = "https://codex.finnvnoi.top/backend-api/codex"
-env_key = "CODEX_API_KEY"
-wire_api = "responses"
+[tui]
+status_line = ["model-with-reasoning", "five-hour-limit", "weekly-limit"]
 ```
 
-Các biến môi trường được lưu:
+Nếu bạn đã tự cấu hình `tui.status_line`, installer giữ nguyên. Bạn có thể tự thêm `five-hour-limit` và `weekly-limit` nếu chưa có.
+
+Quota được làm mới mỗi 15 giây. Nếu API quota tạm thời lỗi, request model vẫn được chuyển tiếp bình thường và proxy giữ snapshot quota hợp lệ gần nhất.
+
+### Tự khởi động
+
+Proxy quota được chạy ngay trong lúc cài và tự chạy lại sau khi đăng nhập:
+
+- Windows: thư mục Startup của người dùng;
+- Linux desktop: XDG autostart;
+- macOS: LaunchAgent của người dùng;
+- shell Linux/macOS cũng kiểm tra và khởi động proxy theo cách idempotent từ profile do installer quản lý.
+
+Chỉ khi bật quota mới cần Python 3.8 trở lên.
+
+### Biến môi trường bền vững
+
+Windows lưu các biến sau trong User environment:
 
 - `CODEX_BASE_URL`
 - `CODEX_API_KEY`
 - `CODEX_MODEL`
 - `CODEX_REASONING_EFFORT`
 
-Windows lưu chúng bền vững dưới dạng biến môi trường User. Linux và macOS lưu trong `~/.codex/codex_custom_endpoint.env` với quyền file `600`, sau đó tự động nạp file này từ cấu hình shell đã chọn cho mọi terminal mới. Tiến trình installer không thể sửa môi trường của shell cha đang chạy, vì vậy lệnh `source` chỉ cần chạy một lần nếu bạn muốn tiếp tục dùng ngay terminal đã mở từ trước khi cài.
+Khi bật quota, Windows còn lưu endpoint proxy, endpoint quota, token localhost, host và port trong User environment để Codex App và launcher Startup hoạt động sau lần đăng nhập máy tiếp theo.
 
-Lần cài đầu tiên sẽ sao lưu config, catalog đích, dữ liệu môi trường và trạng thái liên quan. Chạy lại installer không ghi đè bản sao lưu gốc. Khi uninstall, các file ban đầu được phục hồi; nếu file cài đặt đã bị sửa sau đó, uninstall tạo thêm một bản an toàn trước khi phục hồi.
+Linux và macOS lưu các biến chính trong `~/.codex/codex_custom_endpoint.env` với quyền `600`. Bash, Zsh và shell POSIX khác tự nạp file này. Với Fish, installer ghi các lệnh `set -gx` tương đương vào `~/.config/fish/conf.d/codex-custom-endpoint.fish` với quyền `600`, tránh cú pháp `export` kiểu POSIX từng gây `invalid_api_key` trên Fish/Arch Linux.
 
-Hãy khởi động lại Codex sau khi cài đặt hoặc gỡ cài đặt.
+Mọi terminal mở sau khi cài sẽ tự nhận biến. Để cập nhật terminal đang mở trong lúc chạy installer, chỉ cần chạy một lần.
+
+Bash/Zsh/POSIX:
+
+```bash
+source ~/.codex/codex_custom_endpoint.env
+```
+
+Fish:
+
+```fish
+source ~/.config/fish/conf.d/codex-custom-endpoint.fish
+```
+
+Hãy khởi động lại Codex CLI hoặc Codex App sau khi cài.
+
+### Chẩn đoán
+
+Linux/macOS:
+
+```bash
+./codex_install.sh --doctor
+```
+
+Chế độ chẩn đoán không in API key. Nó kiểm tra môi trường đã lưu, shell profile, provider config và proxy quota nếu đang bật.
+
+### Gỡ cài đặt
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\codex_uninstall.ps1
+```
+
+Linux/macOS:
+
+```bash
+./codex_uninstall.sh
+```
+
+Uninstall dừng proxy quota, xóa mục tự khởi động, phục hồi file và biến môi trường ban đầu của Codex, đồng thời giữ bản sao an toàn nếu file do installer quản lý đã bị chỉnh sửa sau khi cài.
