@@ -283,6 +283,66 @@ function Assert-Catalog {
     }
 }
 
+function Test-CatalogContainsModel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Model
+    )
+
+    $catalog = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return $null -ne (@($catalog.models) | Where-Object {
+        [string]$_.slug -eq $Model
+    } | Select-Object -First 1)
+}
+
+function Add-CustomCatalogModel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Model,
+        [Parameter(Mandatory = $true)]
+        [string]$DisplayName
+    )
+
+    $catalog = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ($null -ne (@($catalog.models) | Where-Object {
+        [string]$_.slug -eq $Model
+    } | Select-Object -First 1)) {
+        return
+    }
+
+    $template = @($catalog.models) | Where-Object {
+        [string]$_.slug -eq $DefaultModel
+    } | Select-Object -First 1
+    if ($null -eq $template) {
+        $template = @($catalog.models) | Select-Object -First 1
+    }
+
+    $customModel = $template | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    $customModel.slug = $Model
+    $customModel.display_name = $DisplayName
+    $customModel.description = 'Custom model configured by the installer.'
+    $customModel.availability_nux = $null
+    $customModel.upgrade = $null
+
+    $priorities = @($catalog.models) |
+        ForEach-Object { $_.priority } |
+        Where-Object { $null -ne $_ } |
+        ForEach-Object { [int]$_ }
+    $customModel.priority = if ($priorities.Count -eq 0) {
+        1
+    }
+    else {
+        ($priorities | Measure-Object -Maximum).Maximum + 1
+    }
+
+    $catalog.models = @($catalog.models) + @($customModel)
+    Write-JsonAtomic -Path $Path -Value $catalog
+}
+
 function Get-Sha256 {
     param(
         [Parameter(Mandatory = $true)]
@@ -350,18 +410,28 @@ if ($NonInteractive) {
     $endpoint = $DefaultEndpoint
     $apiKey = Read-ApiKey -ExistingValue $existingApiKey
     $model = $DefaultModel
+    $modelDisplayName = $null
     $effort = $DefaultEffort
 }
 else {
     $endpoint = Read-PlainValue -Label 'Endpoint' -DefaultValue $DefaultEndpoint
     $apiKey = Read-ApiKey -ExistingValue $existingApiKey
     $model = Read-PlainValue -Label 'Model' -DefaultValue $DefaultModel
+    if (Test-CatalogContainsModel -Path $catalogSourcePath -Model $model) {
+        $modelDisplayName = $null
+    }
+    else {
+        $modelDisplayName = Read-PlainValue -Label 'Model display name' -DefaultValue $model
+    }
     $effort = Read-PlainValue -Label 'Reasoning effort' -DefaultValue $DefaultEffort
 }
 
 Assert-Endpoint -Endpoint $endpoint
 if ([string]::IsNullOrWhiteSpace($model)) {
     throw 'Model cannot be empty.'
+}
+if ($null -ne $modelDisplayName -and [string]::IsNullOrWhiteSpace($modelDisplayName)) {
+    throw 'Model display name cannot be empty.'
 }
 if ([string]::IsNullOrWhiteSpace($effort)) {
     throw 'Reasoning effort cannot be empty.'
@@ -456,6 +526,9 @@ Write-Utf8NoBomAtomic -Path $configPath -Content $configContent
 $catalogTemporaryPath = Join-Path $codexHome ('.' + $TargetCatalogName + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
 try {
     Copy-Item -LiteralPath $catalogSourcePath -Destination $catalogTemporaryPath -Force
+    if ($null -ne $modelDisplayName) {
+        Add-CustomCatalogModel -Path $catalogTemporaryPath -Model $model -DisplayName $modelDisplayName
+    }
     Assert-Catalog -Path $catalogTemporaryPath
     Move-Item -LiteralPath $catalogTemporaryPath -Destination $targetCatalogPath -Force
 }

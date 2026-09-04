@@ -44,7 +44,7 @@ Run PowerShell in the repository directory:
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-The installer prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt.
+The installer prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt. If the entered model is not in the bundled catalog, the installer also asks for its display name and adds it to the installed catalog. Windows handles this natively; Linux and macOS require `python3` or `node` only when adding a custom model.
 
 Uninstall and restore the original state:
 
@@ -169,7 +169,7 @@ Mở PowerShell tại thư mục repository và chạy:
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-Installer sẽ yêu cầu nhập endpoint, API key, model và reasoning effort. Nhấn Enter để dùng giá trị mặc định hiển thị trên màn hình.
+Installer sẽ yêu cầu nhập endpoint, API key, model và reasoning effort. Nhấn Enter để dùng giá trị mặc định hiển thị trên màn hình. Nếu model vừa nhập chưa có trong catalog đi kèm, installer sẽ hỏi thêm tên hiển thị và thêm model đó vào catalog được cài đặt. Windows xử lý trực tiếp; Linux và macOS chỉ cần `python3` hoặc `node` khi thêm model tùy chỉnh.
 
 Gỡ cài đặt và khôi phục trạng thái ban đầu:
 

@@ -164,6 +164,81 @@ read_api_key() {
     fi
 }
 
+catalog_has_model() {
+    catalog_path="$1"
+    model="$2"
+
+    grep -Fq "\"slug\": \"$model\"" "$catalog_path"
+}
+
+add_custom_catalog_model() {
+    catalog_path="$1"
+    model="$2"
+    display_name="$3"
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$catalog_path" "$model" "$display_name" "$DEFAULT_MODEL" <<'PY'
+import copy
+import json
+import sys
+
+catalog_path, model, display_name, default_model = sys.argv[1:]
+with open(catalog_path, encoding="utf-8") as catalog_file:
+    catalog = json.load(catalog_file)
+
+models = catalog.get("models", [])
+if any(item.get("slug") == model for item in models):
+    raise SystemExit(0)
+
+template = next((item for item in models if item.get("slug") == default_model), None)
+if template is None:
+    template = models[0]
+
+custom_model = copy.deepcopy(template)
+custom_model["slug"] = model
+custom_model["display_name"] = display_name
+custom_model["description"] = "Custom model configured by the installer."
+custom_model["availability_nux"] = None
+custom_model["upgrade"] = None
+priorities = [item["priority"] for item in models if isinstance(item.get("priority"), int)]
+custom_model["priority"] = max(priorities, default=0) + 1
+models.append(custom_model)
+
+with open(catalog_path, "w", encoding="utf-8", newline="\n") as catalog_file:
+    json.dump(catalog, catalog_file, ensure_ascii=False, indent=2)
+    catalog_file.write("\n")
+PY
+        return
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        node - "$catalog_path" "$model" "$display_name" "$DEFAULT_MODEL" <<'JS'
+const fs = require("fs");
+const [catalogPath, model, displayName, defaultModel] = process.argv.slice(2);
+const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+const models = catalog.models;
+if (models.some((item) => item.slug === model)) {
+    process.exit(0);
+}
+
+const template = models.find((item) => item.slug === defaultModel) ?? models[0];
+const customModel = structuredClone(template);
+customModel.slug = model;
+customModel.display_name = displayName;
+customModel.description = "Custom model configured by the installer.";
+customModel.availability_nux = null;
+customModel.upgrade = null;
+customModel.priority =
+    Math.max(0, ...models.map((item) => item.priority).filter(Number.isInteger)) + 1;
+models.push(customModel);
+fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
+JS
+        return
+    fi
+
+    die 'Adding a custom model requires python3 or node.'
+}
+
 remove_shell_profile_block() {
     profile_path="$1"
     profile_existed="$2"
@@ -489,11 +564,17 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
     ENDPOINT="$DEFAULT_ENDPOINT"
     API_KEY="$(read_api_key "$EXISTING_API_KEY")"
     MODEL="$DEFAULT_MODEL"
+    MODEL_DISPLAY_NAME=''
     EFFORT="$DEFAULT_EFFORT"
 else
     ENDPOINT="$(read_with_default 'Endpoint' "$DEFAULT_ENDPOINT")"
     API_KEY="$(read_api_key "$EXISTING_API_KEY")"
     MODEL="$(read_with_default 'Model' "$DEFAULT_MODEL")"
+    if catalog_has_model "$CATALOG_SOURCE_PATH" "$MODEL"; then
+        MODEL_DISPLAY_NAME=''
+    else
+        MODEL_DISPLAY_NAME="$(read_with_default 'Model display name' "$MODEL")"
+    fi
     EFFORT="$(read_with_default 'Reasoning effort' "$DEFAULT_EFFORT")"
 fi
 
@@ -586,6 +667,9 @@ write_config
 
 catalog_temporary_path="$(mktemp "$CODEX_HOME_PATH/.catalog.XXXXXX")"
 cp "$CATALOG_SOURCE_PATH" "$catalog_temporary_path"
+if [ -n "$MODEL_DISPLAY_NAME" ]; then
+    add_custom_catalog_model "$catalog_temporary_path" "$MODEL" "$MODEL_DISPLAY_NAME"
+fi
 mv -f "$catalog_temporary_path" "$TARGET_CATALOG_PATH"
 
 write_environment_file
