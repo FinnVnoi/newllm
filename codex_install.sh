@@ -533,7 +533,8 @@ run_doctor() {
 
     if [ "$doctor_ok" -eq 1 ]; then
         printf 'Diagnosis: environment and Codex config are aligned.\n'
-        printf 'If the endpoint still reports invalid_api_key, rerun the installer and enter a valid key instead of keeping the existing one.\n'
+        printf 'If the endpoint still reports invalid_api_key, restart your device and try again.\n'
+        printf 'If the error persists after restarting, rerun the installer and enter a valid key instead of keeping the existing one.\n'
         return 0
     fi
 
