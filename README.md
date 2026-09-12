@@ -5,6 +5,7 @@ Cross-platform installers for configuring a custom Codex model provider, model c
 - Windows: `codex_install.ps1` / `codex_uninstall.ps1`
 - Linux and macOS, including Bash, Zsh, and Fish: `codex_install.sh` / `codex_uninstall.sh`
 - Bundled catalog: `legacy_direct_model_catalog.json`
+- Shell execution is disabled in the bundled catalog because this endpoint does not implement the local-shell execution loop.
 
 The default values match the repository owner's setup:
 
@@ -131,6 +132,8 @@ base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
 ```
+
+The bundled models set `shell_type` to `disabled`. This prevents Codex from emitting `local_shell_call` items that this compatibility endpoint cannot execute and acknowledge. Use a client/backend that implements the documented local-shell loop before enabling shell execution.
 
 It also persists:
 
