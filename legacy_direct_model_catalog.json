@@ -31,7 +31,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 1,
@@ -117,7 +117,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 2,
@@ -201,7 +201,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 3,
@@ -277,7 +277,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 7,
@@ -355,7 +355,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 16,
@@ -431,7 +431,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 23,
@@ -499,7 +499,7 @@
           "description": "Extra high reasoning for complex problems"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 29,
@@ -574,7 +574,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "disabled",
+      "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
       "priority": 0,

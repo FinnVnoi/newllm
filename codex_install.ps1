@@ -325,7 +325,6 @@ function Add-CustomCatalogModel {
     $customModel.slug = $Model
     $customModel.display_name = $DisplayName
     $customModel.description = 'Custom model configured by the installer.'
-    $customModel.shell_type = 'disabled'
     $customModel.availability_nux = $null
     $customModel.upgrade = $null
 
