@@ -560,4 +560,4 @@ Write-Host 'Codex custom endpoint installation completed.'
 Write-Host ('Config:  ' + $configPath)
 Write-Host ('Catalog: ' + $targetCatalogPath)
 Write-Host 'User environment variables: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MODEL, CODEX_REASONING_EFFORT'
-Write-Host 'Restart Codex so the new user environment is loaded.'
+Write-Host 'To apply these changes, close all running Codex applications and reopen them.'

@@ -695,4 +695,4 @@ printf 'API key stored: %s characters (value hidden)\n' "${#API_KEY}"
 printf 'Every new terminal will load these variables automatically.\n'
 printf 'For this already-open terminal only, run once: source %s\n' "$(shell_quote "$ENV_FILE_PATH")"
 printf 'If authentication fails, run: %s --doctor\n' "$(shell_quote "$0")"
-printf 'Restart Codex after loading the new environment.\n'
+printf 'To apply these changes, restart your device before using Codex.\n'

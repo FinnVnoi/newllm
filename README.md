@@ -143,7 +143,7 @@ Windows stores them as User environment variables. Linux and macOS store them in
 
 The first installation backs up the original config, target catalog, environment data, and related state. Re-running the installer keeps the original backup. Uninstall restores the original files and preserves a safety copy if an installed file was changed afterward.
 
-Restart Codex after installing or uninstalling.
+After installing on Windows, close all running Codex applications and reopen them. After installing on Linux or macOS, restart your device. Restart Codex after uninstalling.
 
 ## Tiếng Việt
 
@@ -269,4 +269,4 @@ Windows lưu chúng bền vững dưới dạng biến môi trường User. Linu
 
 Lần cài đầu tiên sẽ sao lưu config, catalog đích, dữ liệu môi trường và trạng thái liên quan. Chạy lại installer không ghi đè bản sao lưu gốc. Khi uninstall, các file ban đầu được phục hồi; nếu file cài đặt đã bị sửa sau đó, uninstall tạo thêm một bản an toàn trước khi phục hồi.
 
-Hãy khởi động lại Codex sau khi cài đặt hoặc gỡ cài đặt.
+Sau khi cài đặt trên Windows, hãy đóng tất cả ứng dụng Codex đang chạy rồi mở lại. Sau khi cài đặt trên Linux hoặc macOS, hãy khởi động lại thiết bị. Hãy khởi động lại Codex sau khi gỡ cài đặt.
