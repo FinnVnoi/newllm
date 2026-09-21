@@ -76,7 +76,9 @@
       "max_context_window": 372000,
       "comp_hash": "3000",
       "effective_context_window_percent": 95,
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "image_generation"
+      ],
       "input_modalities": [
         "text",
         "image"
@@ -160,7 +162,9 @@
       "max_context_window": 372000,
       "comp_hash": "3000",
       "effective_context_window_percent": 95,
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "image_generation"
+      ],
       "input_modalities": [
         "text",
         "image"
@@ -244,7 +248,9 @@
       "max_context_window": 372000,
       "comp_hash": "3000",
       "effective_context_window_percent": 95,
-      "experimental_supported_tools": [],
+      "experimental_supported_tools": [
+        "image_generation"
+      ],
       "input_modalities": [
         "text",
         "image"
