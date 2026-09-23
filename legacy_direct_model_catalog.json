@@ -111,6 +111,10 @@
         {
           "effort": "max",
           "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+          "effort": "ultra",
+          "description": "Maximum reasoning with automatic task delegation"
         }
       ],
       "shell_type": "shell_command",
@@ -193,6 +197,10 @@
         {
           "effort": "max",
           "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+          "effort": "ultra",
+          "description": "Maximum reasoning with automatic task delegation"
         }
       ],
       "shell_type": "shell_command",
