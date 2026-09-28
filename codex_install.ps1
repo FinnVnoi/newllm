@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [ValidateSet('account', 'custom-endpoint')]
+    [string]$Mode,
+    [switch]$Doctor
 )
 
 Set-StrictMode -Version Latest
@@ -9,8 +12,6 @@ $ErrorActionPreference = 'Stop'
 $DefaultEndpoint = 'https://codex.finnvnoi.top/backend-api/codex'
 $DefaultModel = 'gpt-5.6-sol'
 $DefaultEffort = 'xhigh'
-$ProviderId = 'codex'
-$ProviderName = 'CODEX'
 $ApiKeyVariable = 'CODEX_API_KEY'
 $TargetCatalogName = 'legacy_direct_model_catalog.json'
 $StateFileName = 'codex_custom_endpoint_install_state.json'
@@ -52,7 +53,7 @@ function Set-TopLevelTomlValue {
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
         [AllowEmptyString()]
-        [System.Collections.Generic.List[string]]$Lines,
+        [object]$Lines,
         [Parameter(Mandatory = $true)]
         [string]$Key,
         [Parameter(Mandatory = $true)]
@@ -92,7 +93,7 @@ function Set-TableTomlValue {
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
         [AllowEmptyString()]
-        [System.Collections.Generic.List[string]]$Lines,
+        [object]$Lines,
         [Parameter(Mandatory = $true)]
         [string]$TableName,
         [Parameter(Mandatory = $true)]
@@ -250,6 +251,109 @@ function Read-ApiKey {
     return $enteredValue.Trim()
 }
 
+function Read-InstallMode {
+    if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+        return $Mode
+    }
+
+    Write-Host ''
+    Write-Host 'Select installation mode:'
+    Write-Host '  1. custom-endpoint - Use the current custom endpoint behavior without native login.'
+    Write-Host '  2. account         - Require Codex/OpenAI login and enable account-authenticated features.'
+    $selection = Read-Host 'Mode [1]'
+    if ([string]::IsNullOrWhiteSpace($selection) -or $selection.Trim() -eq '1') {
+        return 'custom-endpoint'
+    }
+    if ($selection.Trim() -eq '2') {
+        return 'account'
+    }
+    throw 'Mode must be 1 (custom-endpoint) or 2 (account).'
+}
+
+function Assert-AccountLogin {
+    $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+    if ($null -eq $codexCommand) {
+        throw 'Account mode requires the Codex CLI. Install Codex or open a terminal where the codex command is available, then run codex login.'
+    }
+
+    & $codexCommand.Name login status *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Account mode requires an active Codex/OpenAI login. Run codex login (or sign in through Codex App), then run the installer again.'
+    }
+}
+
+function Remove-TopLevelTomlValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $tableStart = $Lines.Count
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index] -match '^\s*\[') {
+            $tableStart = $index
+            break
+        }
+    }
+
+    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
+    for ($index = $tableStart - 1; $index -ge 0; $index--) {
+        if ($Lines[$index] -match $pattern) {
+            $Lines.RemoveAt($index)
+        }
+    }
+}
+
+function Remove-TomlTable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string]$TableName
+    )
+
+    $tablePattern = '^\s*\[\s*' + [regex]::Escape($TableName) + '\s*\]\s*(?:#.*)?$'
+    $tableStart = -1
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index] -match $tablePattern) {
+            $tableStart = $index
+            break
+        }
+    }
+    if ($tableStart -lt 0) {
+        return
+    }
+
+    $tableEnd = $Lines.Count
+    for ($index = $tableStart + 1; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index] -match '^\s*\[') {
+            $tableEnd = $index
+            break
+        }
+    }
+    for ($index = $tableEnd - 1; $index -ge $tableStart; $index--) {
+        $Lines.RemoveAt($index)
+    }
+    while ($tableStart -gt 0 -and [string]::IsNullOrWhiteSpace($Lines[$tableStart - 1])) {
+        $Lines.RemoveAt($tableStart - 1)
+        $tableStart--
+    }
+}
+
+function Test-AccountLogin {
+    $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+    if ($null -eq $codexCommand) {
+        return $false
+    }
+
+    & $codexCommand.Name login status *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 function Assert-Endpoint {
     param(
         [Parameter(Mandatory = $true)]
@@ -393,17 +497,108 @@ $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bundledCatalogPath = Join-Path $scriptDirectory $TargetCatalogName
 $legacyFallbackPath = Join-Path $codexHome 'legacy-direct-model-catalog.json'
 
-if (Test-Path -LiteralPath $bundledCatalogPath -PathType Leaf) {
-    $catalogSourcePath = $bundledCatalogPath
+if ($NonInteractive -and -not $Doctor -and -not $PSBoundParameters.ContainsKey('Mode')) {
+    throw '-NonInteractive requires -Mode account or -Mode custom-endpoint.'
 }
-elseif (Test-Path -LiteralPath $legacyFallbackPath -PathType Leaf) {
-    $catalogSourcePath = $legacyFallbackPath
-}
-else {
-    throw "Missing $TargetCatalogName beside the installer, and no legacy-direct-model-catalog.json fallback exists in $codexHome."
+if ($Doctor) {
+    $doctorState = $null
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        $doctorState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    }
+    if (-not $PSBoundParameters.ContainsKey('Mode')) {
+        $savedMode = if ($null -ne $doctorState -and $doctorState.PSObject.Properties.Name -contains 'mode') { [string]$doctorState.mode } else { $null }
+        $Mode = if ($savedMode -in @('account', 'custom-endpoint')) { $savedMode } else { 'custom-endpoint' }
+    }
+    else {
+        $Mode = [string]$Mode
+    }
+
+    $doctorOk = $true
+    Write-Host ('Mode: ' + $Mode)
+    if ($Mode -eq 'account') {
+        if (Test-AccountLogin) {
+            Write-Host 'Native Codex/OpenAI login: active'
+        }
+        else {
+            Write-Host 'Native Codex/OpenAI login: missing or inactive'
+            $doctorOk = $false
+        }
+    }
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $doctorConfig = Get-Content -LiteralPath $configPath -Raw
+        if ($Mode -eq 'account') {
+            $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"CODEX"' -and
+                $doctorConfig -match '(?m)^\s*requires_openai_auth\s*=\s*true' -and
+                $doctorConfig -match '(?m)^\s*base_url\s*=\s*"https?://' -and
+                $doctorConfig -notmatch '(?m)^\s*model_catalog_json\s*='
+        }
+        else {
+            $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"codex"' -and
+                $doctorConfig -match '(?m)^\s*model_catalog_json\s*=' -and
+                $doctorConfig -match '(?m)^\s*env_key\s*=\s*"CODEX_API_KEY"'
+        }
+        if ($configOk) {
+            Write-Host 'Codex provider config: configured'
+        }
+        else {
+            Write-Host 'Codex provider config: missing or inconsistent'
+            $doctorOk = $false
+        }
+    }
+    else {
+        Write-Host 'Codex provider config: missing'
+        $doctorOk = $false
+    }
+    foreach ($variableName in @('CODEX_BASE_URL', 'CODEX_API_KEY', 'CODEX_MODEL', 'CODEX_REASONING_EFFORT')) {
+        $value = [Environment]::GetEnvironmentVariable($variableName, 'Process')
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            $value = [Environment]::GetEnvironmentVariable($variableName, 'User')
+        }
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            Write-Host ($variableName + ': missing')
+            $doctorOk = $false
+        }
+        elseif ($variableName -eq 'CODEX_API_KEY') {
+            Write-Host ($variableName + ': loaded (' + $value.Length + ' characters; value hidden)')
+        }
+        else {
+            Write-Host ($variableName + ': loaded')
+        }
+    }
+    if ($doctorOk) {
+        Write-Host 'Diagnosis: mode, environment, and Codex config are aligned.'
+        Write-Host 'If the endpoint still reports invalid_api_key, close and reopen Codex, then restart your device if needed.'
+        exit 0
+    }
+    Write-Host 'Diagnosis: fix the reported issue, then rerun this doctor command.'
+    exit 1
 }
 
-Assert-Catalog -Path $catalogSourcePath
+$Mode = Read-InstallMode
+if ($Mode -eq 'account') {
+    Assert-AccountLogin
+    $ProviderId = 'CODEX'
+    $ProviderName = 'openai'
+}
+else {
+    $ProviderId = 'codex'
+    $ProviderName = 'CODEX'
+}
+
+$catalogSourcePath = $null
+if ($Mode -eq 'custom-endpoint') {
+    if (Test-Path -LiteralPath $bundledCatalogPath -PathType Leaf) {
+        $catalogSourcePath = $bundledCatalogPath
+    }
+    elseif (Test-Path -LiteralPath $legacyFallbackPath -PathType Leaf) {
+        $catalogSourcePath = $legacyFallbackPath
+    }
+    else {
+        throw "Missing $TargetCatalogName beside the installer, and no legacy-direct-model-catalog.json fallback exists in $codexHome."
+    }
+
+    Assert-Catalog -Path $catalogSourcePath
+}
 
 $existingApiKey = Get-ExistingApiKey
 if ($NonInteractive) {
@@ -417,7 +612,10 @@ else {
     $endpoint = Read-PlainValue -Label 'Endpoint' -DefaultValue $DefaultEndpoint
     $apiKey = Read-ApiKey -ExistingValue $existingApiKey
     $model = Read-PlainValue -Label 'Model' -DefaultValue $DefaultModel
-    if (Test-CatalogContainsModel -Path $catalogSourcePath -Model $model) {
+    if ($Mode -eq 'custom-endpoint' -and (Test-CatalogContainsModel -Path $catalogSourcePath -Model $model)) {
+        $modelDisplayName = $null
+    }
+    elseif ($Mode -eq 'account') {
         $modelDisplayName = $null
     }
     else {
@@ -495,6 +693,7 @@ else {
         environment = $environmentState
         installedConfigSha256 = $null
         installedCatalogSha256 = $null
+        mode = $Mode
     }
     Write-JsonAtomic -Path $statePath -Value $state
 }
@@ -505,17 +704,31 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
         [void]$configLines.Add($line)
     }
 }
-
 Set-TopLevelTomlValue -Lines $configLines -Key 'model' -EncodedValue (ConvertTo-TomlBasicString $model)
 Set-TopLevelTomlValue -Lines $configLines -Key 'model_provider' -EncodedValue (ConvertTo-TomlBasicString $ProviderId)
 Set-TopLevelTomlValue -Lines $configLines -Key 'model_reasoning_effort' -EncodedValue (ConvertTo-TomlBasicString $effort)
-Set-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json' -EncodedValue (ConvertTo-TomlBasicString $targetCatalogPath)
 
 $providerTable = 'model_providers.' + $ProviderId
+if ($Mode -eq 'account') {
+    Remove-TomlTable -Lines $configLines -TableName 'model_providers.codex'
+}
+else {
+    Remove-TomlTable -Lines $configLines -TableName 'model_providers.CODEX'
+}
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'name' -EncodedValue (ConvertTo-TomlBasicString $ProviderName)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'base_url' -EncodedValue (ConvertTo-TomlBasicString $endpoint)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'env_key' -EncodedValue (ConvertTo-TomlBasicString $ApiKeyVariable)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'wire_api' -EncodedValue (ConvertTo-TomlBasicString 'responses')
+if ($Mode -eq 'account') {
+    Set-TopLevelTomlValue -Lines $configLines -Key 'service_tier' -EncodedValue (ConvertTo-TomlBasicString 'default')
+    Remove-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json'
+    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_websockets' -EncodedValue 'false'
+    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'requires_openai_auth' -EncodedValue 'true'
+}
+else {
+    Set-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json' -EncodedValue (ConvertTo-TomlBasicString $targetCatalogPath)
+    Remove-TopLevelTomlValue -Lines $configLines -Key 'service_tier'
+}
 
 $configContent = [string]::Join([Environment]::NewLine, $configLines)
 if ($configLines.Count -gt 0) {
@@ -523,18 +736,21 @@ if ($configLines.Count -gt 0) {
 }
 Write-Utf8NoBomAtomic -Path $configPath -Content $configContent
 
-$catalogTemporaryPath = Join-Path $codexHome ('.' + $TargetCatalogName + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
-try {
-    Copy-Item -LiteralPath $catalogSourcePath -Destination $catalogTemporaryPath -Force
-    if ($null -ne $modelDisplayName) {
-        Add-CustomCatalogModel -Path $catalogTemporaryPath -Model $model -DisplayName $modelDisplayName
+$catalogTemporaryPath = $null
+if ($Mode -eq 'custom-endpoint') {
+    $catalogTemporaryPath = Join-Path $codexHome ('.' + $TargetCatalogName + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        Copy-Item -LiteralPath $catalogSourcePath -Destination $catalogTemporaryPath -Force
+        if ($null -ne $modelDisplayName) {
+            Add-CustomCatalogModel -Path $catalogTemporaryPath -Model $model -DisplayName $modelDisplayName
+        }
+        Assert-Catalog -Path $catalogTemporaryPath
+        Move-Item -LiteralPath $catalogTemporaryPath -Destination $targetCatalogPath -Force
     }
-    Assert-Catalog -Path $catalogTemporaryPath
-    Move-Item -LiteralPath $catalogTemporaryPath -Destination $targetCatalogPath -Force
-}
-finally {
-    if (Test-Path -LiteralPath $catalogTemporaryPath) {
-        Remove-Item -LiteralPath $catalogTemporaryPath -Force
+    finally {
+        if (Test-Path -LiteralPath $catalogTemporaryPath) {
+            Remove-Item -LiteralPath $catalogTemporaryPath -Force
+        }
     }
 }
 
@@ -551,13 +767,30 @@ foreach ($entry in $environmentValues.GetEnumerator()) {
 Broadcast-EnvironmentChange
 
 $state.lastInstalledAt = (Get-Date).ToString('o')
+if ($state.PSObject.Properties.Name -contains 'mode') {
+    $state.mode = $Mode
+}
+else {
+    $state | Add-Member -NotePropertyName mode -NotePropertyValue $Mode
+}
 $state.installedConfigSha256 = Get-Sha256 -Path $configPath
-$state.installedCatalogSha256 = Get-Sha256 -Path $targetCatalogPath
+$state.installedCatalogSha256 = if (Test-Path -LiteralPath $targetCatalogPath -PathType Leaf) { Get-Sha256 -Path $targetCatalogPath } else { $null }
 Write-JsonAtomic -Path $statePath -Value $state
 
 Write-Host ''
-Write-Host 'Codex custom endpoint installation completed.'
+if ($Mode -eq 'account') {
+    Write-Host 'Codex account-authenticated custom endpoint installation completed.'
+    Write-Host 'Native Codex/OpenAI login was verified.'
+}
+else {
+    Write-Host 'Codex custom endpoint installation completed.'
+}
 Write-Host ('Config:  ' + $configPath)
-Write-Host ('Catalog: ' + $targetCatalogPath)
+if ($Mode -eq 'custom-endpoint') {
+    Write-Host ('Catalog: ' + $targetCatalogPath)
+}
+else {
+    Write-Host 'Catalog: native Codex catalog (local override not used)'
+}
 Write-Host 'User environment variables: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MODEL, CODEX_REASONING_EFFORT'
 Write-Host 'To apply these changes, close all running Codex applications and reopen them.'

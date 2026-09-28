@@ -4,8 +4,6 @@ set -euo pipefail
 DEFAULT_ENDPOINT='https://codex.finnvnoi.top/backend-api/codex'
 DEFAULT_MODEL='gpt-5.6-sol'
 DEFAULT_EFFORT='xhigh'
-PROVIDER_ID='codex'
-PROVIDER_NAME='CODEX'
 API_KEY_VARIABLE='CODEX_API_KEY'
 TARGET_CATALOG_NAME='legacy_direct_model_catalog.json'
 STATE_FILE_NAME='codex_custom_endpoint_unix_state'
@@ -15,6 +13,8 @@ PROFILE_BEGIN='# >>> codex-custom-endpoint >>>'
 PROFILE_END='# <<< codex-custom-endpoint <<<'
 NON_INTERACTIVE=0
 DOCTOR_MODE=0
+MODE=''
+MODE_SET=0
 
 die() {
     printf 'Error: %s\n' "$*" >&2
@@ -23,17 +23,30 @@ die() {
 
 usage() {
     printf '%s\n' \
-        'Usage: ./codex_install.sh [--non-interactive | --doctor]' \
+        'Usage: ./codex_install.sh [--mode account|custom-endpoint] [--non-interactive | --doctor]' \
         '' \
-        'Without arguments, the installer prompts for endpoint, API key, model, and effort.' \
-        '--non-interactive uses the bundled defaults and requires CODEX_API_KEY to be set.' \
-        '--doctor checks the saved config and API key loading without printing the key.'
+        'Without arguments, the installer prompts for mode, endpoint, API key, model, and effort.' \
+        '--non-interactive requires --mode and uses the bundled defaults.' \
+        '--doctor checks the saved mode, config, login, and API key loading without printing the key.'
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --non-interactive)
             NON_INTERACTIVE=1
+            ;;
+        --mode)
+            [ "$#" -ge 2 ] || die '--mode requires account or custom-endpoint.'
+            MODE="$2"
+            MODE_SET=1
+            shift
+            case "$MODE" in
+                account|custom-endpoint)
+                    ;;
+                *)
+                    die '--mode must be account or custom-endpoint.'
+                    ;;
+            esac
             ;;
         --doctor)
             DOCTOR_MODE=1
@@ -48,6 +61,10 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+if [ "$NON_INTERACTIVE" -eq 1 ] && [ "$DOCTOR_MODE" -eq 0 ] && [ "$MODE_SET" -eq 0 ]; then
+    die '--non-interactive requires --mode account or --mode custom-endpoint.'
+fi
 
 SCRIPT_DIRECTORY="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HOME_PATH="${CODEX_HOME:-$HOME/.codex}"
@@ -120,6 +137,61 @@ toml_quote() {
     value="${value//$'\r'/\\r}"
     value="${value//$'\n'/\\n}"
     printf '"%s"' "$value"
+}
+
+remove_top_level_key() {
+    key="$1"
+    [ -f "$CONFIG_PATH" ] || return 0
+    temporary_path="$(mktemp "$CODEX_HOME_PATH/.config-clean.XXXXXX")"
+    KEY="$key" awk '
+        BEGIN { key = ENVIRON["KEY"]; in_top = 1 }
+        $0 ~ /^[[:space:]]*\[/ { in_top = 0 }
+        in_top && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { next }
+        { print }
+    ' "$CONFIG_PATH" > "$temporary_path"
+    cp "$temporary_path" "$CONFIG_PATH"
+    rm -f "$temporary_path"
+}
+
+remove_provider_table() {
+    provider_id="$1"
+    [ -f "$CONFIG_PATH" ] || return 0
+    temporary_path="$(mktemp "$CODEX_HOME_PATH/.config-clean.XXXXXX")"
+    PROVIDER_ID="$provider_id" awk '
+        BEGIN { skipping = 0 }
+        $0 ~ "^[[:space:]]*\\[model_providers\\." ENVIRON["PROVIDER_ID"] "\\][[:space:]]*(#.*)?$" { skipping = 1; next }
+        $0 ~ "^[[:space:]]*\\[" { skipping = 0 }
+        !skipping { print }
+    ' "$CONFIG_PATH" > "$temporary_path"
+    cp "$temporary_path" "$CONFIG_PATH"
+    rm -f "$temporary_path"
+}
+
+read_install_mode() {
+    if [ "$MODE_SET" -eq 1 ]; then
+        printf '%s\n' "$MODE"
+        return
+    fi
+
+    printf '%s\n' 'Select installation mode:' >&2
+    printf '%s\n' '  1. custom-endpoint - Use the current custom endpoint behavior without native login.' >&2
+    printf '%s\n' '  2. account         - Require Codex/OpenAI login and enable account-authenticated features.' >&2
+    printf 'Mode [1]: ' >&2
+    IFS= read -r selection || die 'Could not read installation mode.'
+    case "$selection" in
+        ''|1) printf '%s\n' 'custom-endpoint' ;;
+        2) printf '%s\n' 'account' ;;
+        *) die 'Mode must be 1 (custom-endpoint) or 2 (account).' ;;
+    esac
+}
+
+assert_account_login() {
+    command -v codex >/dev/null 2>&1 || die 'Account mode requires the Codex CLI. Install Codex or run this from a terminal where codex is available, then run codex login.'
+    codex login status >/dev/null 2>&1 || die 'Account mode requires an active Codex/OpenAI login. Run codex login (or sign in through Codex App), then run the installer again.'
+}
+
+test_account_login() {
+    command -v codex >/dev/null 2>&1 && codex login status >/dev/null 2>&1
 }
 
 read_with_default() {
@@ -271,6 +343,7 @@ write_state() {
         printf 'installed_config_sha256=%s\n' "$INSTALLED_CONFIG_SHA256"
         printf 'installed_catalog_sha256=%s\n' "$INSTALLED_CATALOG_SHA256"
         printf 'installed_env_sha256=%s\n' "$INSTALLED_ENV_SHA256"
+        printf 'mode=%s\n' "$MODE"
     } > "$state_temporary_path"
     chmod 600 "$state_temporary_path"
     mv -f "$state_temporary_path" "$STATE_PATH"
@@ -285,6 +358,9 @@ write_config() {
     provider_url_line="base_url = $(toml_quote "$ENDPOINT")"
     provider_env_line="env_key = $(toml_quote "$API_KEY_VARIABLE")"
     provider_wire_line="wire_api = $(toml_quote 'responses')"
+    provider_websocket_line='supports_websockets = false'
+    provider_auth_line='requires_openai_auth = true'
+    service_tier_line="service_tier = $(toml_quote 'default')"
     config_input="$CONFIG_PATH"
     [ -f "$config_input" ] || config_input='/dev/null'
     config_temporary_path="$(mktemp "$CODEX_HOME_PATH/.config.toml.XXXXXX")"
@@ -297,18 +373,26 @@ write_config() {
     PROVIDER_URL_LINE="$provider_url_line" \
     PROVIDER_ENV_LINE="$provider_env_line" \
     PROVIDER_WIRE_LINE="$provider_wire_line" \
+    PROVIDER_WEBSOCKET_LINE="$provider_websocket_line" \
+    PROVIDER_AUTH_LINE="$provider_auth_line" \
+    SERVICE_TIER_LINE="$service_tier_line" \
+    INSTALL_MODE="$MODE" \
+    PROVIDER_ID="$PROVIDER_ID" \
     LC_ALL=C awk '
         function emit_missing_top() {
             if (!seen_model) print ENVIRON["MODEL_LINE"]
             if (!seen_provider) print ENVIRON["PROVIDER_LINE"]
             if (!seen_effort) print ENVIRON["EFFORT_LINE"]
-            if (!seen_catalog) print ENVIRON["CATALOG_LINE"]
+            if (ENVIRON["INSTALL_MODE"] == "custom-endpoint" && !seen_catalog) print ENVIRON["CATALOG_LINE"]
+            if (ENVIRON["INSTALL_MODE"] == "account" && !seen_service_tier) print ENVIRON["SERVICE_TIER_LINE"]
         }
         function emit_missing_provider() {
             if (!seen_provider_name) print ENVIRON["PROVIDER_NAME_LINE"]
             if (!seen_provider_url) print ENVIRON["PROVIDER_URL_LINE"]
             if (!seen_provider_env) print ENVIRON["PROVIDER_ENV_LINE"]
             if (!seen_provider_wire) print ENVIRON["PROVIDER_WIRE_LINE"]
+            if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_websocket) print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
+            if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_auth) print ENVIRON["PROVIDER_AUTH_LINE"]
         }
         BEGIN {
             top_finished = 0
@@ -328,7 +412,7 @@ write_config() {
                     emit_missing_provider()
                     in_provider = 0
                 }
-                if (line ~ /^[[:space:]]*\[[[:space:]]*model_providers\.codex[[:space:]]*\][[:space:]]*(#.*)?$/) {
+                if (line ~ ("^[[:space:]]*\\[[[:space:]]*model_providers\\." ENVIRON["PROVIDER_ID"] "[[:space:]]*\\][[:space:]]*(#.*)?$")) {
                     provider_seen = 1
                     in_provider = 1
                 }
@@ -353,8 +437,13 @@ write_config() {
                     next
                 }
                 if (line ~ /^[[:space:]]*model_catalog_json[[:space:]]*=/) {
-                    if (!seen_catalog) print ENVIRON["CATALOG_LINE"]
+                    if (ENVIRON["INSTALL_MODE"] == "custom-endpoint" && !seen_catalog) print ENVIRON["CATALOG_LINE"]
                     seen_catalog = 1
+                    next
+                }
+                if (line ~ /^[[:space:]]*service_tier[[:space:]]*=/) {
+                    if (ENVIRON["INSTALL_MODE"] == "account" && !seen_service_tier) print ENVIRON["SERVICE_TIER_LINE"]
+                    seen_service_tier = 1
                     next
                 }
                 print line
@@ -382,6 +471,16 @@ write_config() {
                     seen_provider_wire = 1
                     next
                 }
+                if (line ~ /^[[:space:]]*supports_websockets[[:space:]]*=/) {
+                    if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_websocket) print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
+                    seen_provider_websocket = 1
+                    next
+                }
+                if (line ~ /^[[:space:]]*requires_openai_auth[[:space:]]*=/) {
+                    if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_auth) print ENVIRON["PROVIDER_AUTH_LINE"]
+                    seen_provider_auth = 1
+                    next
+                }
             }
 
             print line
@@ -394,11 +493,15 @@ write_config() {
                 emit_missing_provider()
             } else if (!provider_seen) {
                 print ""
-                print "[model_providers.codex]"
+                print "[model_providers." ENVIRON["PROVIDER_ID"] "]"
                 print ENVIRON["PROVIDER_NAME_LINE"]
                 print ENVIRON["PROVIDER_URL_LINE"]
                 print ENVIRON["PROVIDER_ENV_LINE"]
                 print ENVIRON["PROVIDER_WIRE_LINE"]
+                if (ENVIRON["INSTALL_MODE"] == "account") {
+                    print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
+                    print ENVIRON["PROVIDER_AUTH_LINE"]
+                }
             }
         }
     ' "$config_input" > "$config_temporary_path"
@@ -474,6 +577,7 @@ run_doctor() {
         doctor_profile_path="$desired_profile_path"
     fi
 
+    printf 'Mode: %s\n' "$MODE"
     printf 'Shell: %s\n' "${SHELL:-unknown}"
     printf 'Expected shell profile: %s\n' "$doctor_profile_path"
 
@@ -522,8 +626,22 @@ run_doctor() {
         doctor_ok=0
     fi
 
-    if [ -f "$CONFIG_PATH" ] &&
+    if [ "$MODE" = 'account' ] && test_account_login; then
+        printf 'Native Codex/OpenAI login: active\n'
+    elif [ "$MODE" = 'account' ]; then
+        printf 'Native Codex/OpenAI login: missing or inactive\n'
+        doctor_ok=0
+    fi
+
+    if [ "$MODE" = 'account' ] && [ -f "$CONFIG_PATH" ] &&
+        grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"CODEX"' "$CONFIG_PATH" &&
+        grep -Eq '^[[:space:]]*requires_openai_auth[[:space:]]*=[[:space:]]*true' "$CONFIG_PATH" &&
+        grep -Eq '^[[:space:]]*base_url[[:space:]]*=[[:space:]]*"https?://' "$CONFIG_PATH" &&
+        ! grep -Eq '^[[:space:]]*model_catalog_json[[:space:]]*=' "$CONFIG_PATH"; then
+        printf 'Codex provider config: configured for account mode\n'
+    elif [ "$MODE" = 'custom-endpoint' ] && [ -f "$CONFIG_PATH" ] &&
         grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"codex"' "$CONFIG_PATH" &&
+        grep -Eq '^[[:space:]]*model_catalog_json[[:space:]]*=' "$CONFIG_PATH" &&
         grep -Eq '^[[:space:]]*env_key[[:space:]]*=[[:space:]]*"CODEX_API_KEY"' "$CONFIG_PATH"; then
         printf 'Codex provider config: configured\n'
     else
@@ -533,7 +651,7 @@ run_doctor() {
 
     if [ "$doctor_ok" -eq 1 ]; then
         printf 'Diagnosis: environment and Codex config are aligned.\n'
-        printf 'If the endpoint still reports invalid_api_key, restart your device and try again.\n'
+        printf 'If the endpoint still reports invalid_api_key, close and reopen Codex, then restart your device if needed.\n'
         printf 'If the error persists after restarting, rerun the installer and enter a valid key instead of keeping the existing one.\n'
         return 0
     fi
@@ -543,22 +661,45 @@ run_doctor() {
 }
 
 if [ "$DOCTOR_MODE" -eq 1 ]; then
+    if [ "$MODE_SET" -eq 0 ] && [ -f "$STATE_PATH" ]; then
+        MODE="$(state_get mode)"
+        case "$MODE" in
+            account|custom-endpoint) ;;
+            *) MODE='custom-endpoint' ;;
+        esac
+    elif [ "$MODE_SET" -eq 0 ]; then
+        MODE='custom-endpoint'
+    fi
     if run_doctor; then
         exit 0
     fi
     exit 1
 fi
 
-if [ -f "$BUNDLED_CATALOG_PATH" ]; then
-    CATALOG_SOURCE_PATH="$BUNDLED_CATALOG_PATH"
-elif [ -f "$LEGACY_FALLBACK_PATH" ]; then
-    CATALOG_SOURCE_PATH="$LEGACY_FALLBACK_PATH"
+if [ "$MODE_SET" -eq 0 ]; then
+    MODE="$(read_install_mode)"
+fi
+if [ "$MODE" = 'account' ]; then
+    assert_account_login
+    PROVIDER_ID='CODEX'
+    PROVIDER_NAME='openai'
 else
+    PROVIDER_ID='codex'
+    PROVIDER_NAME='CODEX'
+fi
+
+if [ "$MODE" = 'custom-endpoint' ] && [ -f "$BUNDLED_CATALOG_PATH" ]; then
+    CATALOG_SOURCE_PATH="$BUNDLED_CATALOG_PATH"
+elif [ "$MODE" = 'custom-endpoint' ] && [ -f "$LEGACY_FALLBACK_PATH" ]; then
+    CATALOG_SOURCE_PATH="$LEGACY_FALLBACK_PATH"
+elif [ "$MODE" = 'custom-endpoint' ]; then
     die "Missing $TARGET_CATALOG_NAME beside the installer and no legacy fallback exists in $CODEX_HOME_PATH."
 fi
 
-[ -s "$CATALOG_SOURCE_PATH" ] || die "Catalog is empty: $CATALOG_SOURCE_PATH"
-grep -q '"models"' "$CATALOG_SOURCE_PATH" || die "Catalog does not contain a models field: $CATALOG_SOURCE_PATH"
+if [ "$MODE" = 'custom-endpoint' ]; then
+    [ -s "$CATALOG_SOURCE_PATH" ] || die "Catalog is empty: $CATALOG_SOURCE_PATH"
+    grep -q '"models"' "$CATALOG_SOURCE_PATH" || die "Catalog does not contain a models field: $CATALOG_SOURCE_PATH"
+fi
 
 EXISTING_API_KEY="${CODEX_API_KEY:-}"
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
@@ -571,7 +712,9 @@ else
     ENDPOINT="$(read_with_default 'Endpoint' "$DEFAULT_ENDPOINT")"
     API_KEY="$(read_api_key "$EXISTING_API_KEY")"
     MODEL="$(read_with_default 'Model' "$DEFAULT_MODEL")"
-    if catalog_has_model "$CATALOG_SOURCE_PATH" "$MODEL"; then
+    if [ "$MODE" = 'custom-endpoint' ] && catalog_has_model "$CATALOG_SOURCE_PATH" "$MODEL"; then
+        MODEL_DISPLAY_NAME=''
+    elif [ "$MODE" = 'account' ]; then
         MODEL_DISPLAY_NAME=''
     else
         MODEL_DISPLAY_NAME="$(read_with_default 'Model display name' "$MODEL")"
@@ -664,14 +807,23 @@ else
     write_state
 fi
 
+if [ "$MODE" = 'account' ]; then
+    remove_top_level_key 'model_catalog_json'
+    remove_provider_table 'codex'
+else
+    remove_top_level_key 'service_tier'
+    remove_provider_table 'CODEX'
+fi
 write_config
 
-catalog_temporary_path="$(mktemp "$CODEX_HOME_PATH/.catalog.XXXXXX")"
-cp "$CATALOG_SOURCE_PATH" "$catalog_temporary_path"
-if [ -n "$MODEL_DISPLAY_NAME" ]; then
-    add_custom_catalog_model "$catalog_temporary_path" "$MODEL" "$MODEL_DISPLAY_NAME"
+if [ "$MODE" = 'custom-endpoint' ]; then
+    catalog_temporary_path="$(mktemp "$CODEX_HOME_PATH/.catalog.XXXXXX")"
+    cp "$CATALOG_SOURCE_PATH" "$catalog_temporary_path"
+    if [ -n "$MODEL_DISPLAY_NAME" ]; then
+        add_custom_catalog_model "$catalog_temporary_path" "$MODEL" "$MODEL_DISPLAY_NAME"
+    fi
+    mv -f "$catalog_temporary_path" "$TARGET_CATALOG_PATH"
 fi
-mv -f "$catalog_temporary_path" "$TARGET_CATALOG_PATH"
 
 write_environment_file
 write_shell_profile_block
@@ -682,13 +834,26 @@ export CODEX_MODEL="$MODEL"
 export CODEX_REASONING_EFFORT="$EFFORT"
 
 INSTALLED_CONFIG_SHA256="$(sha256_file "$CONFIG_PATH")"
-INSTALLED_CATALOG_SHA256="$(sha256_file "$TARGET_CATALOG_PATH")"
+if [ -f "$TARGET_CATALOG_PATH" ]; then
+    INSTALLED_CATALOG_SHA256="$(sha256_file "$TARGET_CATALOG_PATH")"
+else
+    INSTALLED_CATALOG_SHA256=''
+fi
 INSTALLED_ENV_SHA256="$(sha256_file "$ENV_FILE_PATH")"
 write_state
 
-printf '\nCodex custom endpoint installation completed.\n'
+if [ "$MODE" = 'account' ]; then
+    printf '\nCodex account-authenticated custom endpoint installation completed.\n'
+    printf 'Native Codex/OpenAI login was verified.\n'
+else
+    printf '\nCodex custom endpoint installation completed.\n'
+fi
 printf 'Config:  %s\n' "$CONFIG_PATH"
-printf 'Catalog: %s\n' "$TARGET_CATALOG_PATH"
+if [ "$MODE" = 'custom-endpoint' ]; then
+    printf 'Catalog: %s\n' "$TARGET_CATALOG_PATH"
+else
+    printf 'Catalog: native Codex catalog (local override not used)\n'
+fi
 printf 'Environment file: %s\n' "$ENV_FILE_PATH"
 printf 'Shell profile: %s\n' "$SHELL_PROFILE_PATH"
 printf 'API key stored: %s characters (value hidden)\n' "${#API_KEY}"
