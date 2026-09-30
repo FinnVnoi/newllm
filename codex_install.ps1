@@ -259,7 +259,7 @@ function Read-InstallMode {
     Write-Host ''
     Write-Host 'Select installation mode:'
     Write-Host '  1. custom-endpoint - Use the current custom endpoint behavior without native login.'
-    Write-Host '  2. account         - Require Codex/OpenAI login and enable account-authenticated features.'
+    Write-Host '  2. account         - Use the native model catalog with a custom endpoint; login is not checked by the installer.'
     $selection = Read-Host 'Mode [1]'
     if ([string]::IsNullOrWhiteSpace($selection) -or $selection.Trim() -eq '1') {
         return 'custom-endpoint'
@@ -268,18 +268,6 @@ function Read-InstallMode {
         return 'account'
     }
     throw 'Mode must be 1 (custom-endpoint) or 2 (account).'
-}
-
-function Assert-AccountLogin {
-    $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
-    if ($null -eq $codexCommand) {
-        throw 'Account mode requires the Codex CLI. Install Codex or open a terminal where the codex command is available, then run codex login.'
-    }
-
-    & $codexCommand.Name login status *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Account mode requires an active Codex/OpenAI login. Run codex login (or sign in through Codex App), then run the installer again.'
-    }
 }
 
 function Remove-TopLevelTomlValue {
@@ -344,14 +332,43 @@ function Remove-TomlTable {
     }
 }
 
-function Test-AccountLogin {
-    $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
-    if ($null -eq $codexCommand) {
-        return $false
+function Remove-TableTomlValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string]$TableName,
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $tablePattern = '^\s*\[\s*' + [regex]::Escape($TableName) + '\s*\]\s*(?:#.*)?$'
+    $tableStart = -1
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index] -match $tablePattern) {
+            $tableStart = $index
+            break
+        }
+    }
+    if ($tableStart -lt 0) {
+        return
     }
 
-    & $codexCommand.Name login status *> $null
-    return $LASTEXITCODE -eq 0
+    $tableEnd = $Lines.Count
+    for ($index = $tableStart + 1; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index] -match '^\s*\[') {
+            $tableEnd = $index
+            break
+        }
+    }
+
+    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
+    for ($index = $tableEnd - 1; $index -gt $tableStart; $index--) {
+        if ($Lines[$index] -match $pattern) {
+            $Lines.RemoveAt($index)
+        }
+    }
 }
 
 function Assert-Endpoint {
@@ -515,22 +532,20 @@ if ($Doctor) {
 
     $doctorOk = $true
     Write-Host ('Mode: ' + $Mode)
-    if ($Mode -eq 'account') {
-        if (Test-AccountLogin) {
-            Write-Host 'Native Codex/OpenAI login: active'
-        }
-        else {
-            Write-Host 'Native Codex/OpenAI login: missing or inactive'
-            $doctorOk = $false
-        }
-    }
     if (Test-Path -LiteralPath $configPath -PathType Leaf) {
         $doctorConfig = Get-Content -LiteralPath $configPath -Raw
         if ($Mode -eq 'account') {
-            $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"CODEX"' -and
-                $doctorConfig -match '(?m)^\s*requires_openai_auth\s*=\s*true' -and
-                $doctorConfig -match '(?m)^\s*base_url\s*=\s*"https?://' -and
-                $doctorConfig -notmatch '(?m)^\s*model_catalog_json\s*='
+            $accountProvider = [regex]::Match($doctorConfig, '(?ms)^\s*\[model_providers\.codex\]\s*(?:#.*)?\r?\n(?<body>.*?)(?=^\s*\[|\z)')
+            $configOk = $doctorConfig -cmatch '(?m)^\s*model_provider\s*=\s*"codex"' -and
+                $accountProvider.Success -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*name\s*=\s*"openai"' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*base_url\s*=\s*"https?://' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*env_key\s*=\s*"CODEX_API_KEY"' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*wire_api\s*=\s*"responses"' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*supports_websockets\s*=\s*false' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*requires_openai_auth\s*=\s*true' -and
+                $doctorConfig -cnotmatch '(?m)^\s*service_tier\s*=' -and
+                $doctorConfig -cnotmatch '(?m)^\s*model_catalog_json\s*='
         }
         else {
             $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"codex"' -and
@@ -576,14 +591,15 @@ if ($Doctor) {
 
 $Mode = Read-InstallMode
 if ($Mode -eq 'account') {
-    Assert-AccountLogin
-    $ProviderId = 'CODEX'
+    $ProviderId = 'codex'
     $ProviderName = 'openai'
 }
 else {
     $ProviderId = 'codex'
     $ProviderName = 'CODEX'
 }
+$ProviderWebsocketsValue = if ($Mode -eq 'account') { 'false' } else { $null }
+$ProviderRequiresAuthValue = if ($Mode -eq 'account') { 'true' } else { $null }
 
 $catalogSourcePath = $null
 if ($Mode -eq 'custom-endpoint') {
@@ -705,12 +721,13 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
     }
 }
 Set-TopLevelTomlValue -Lines $configLines -Key 'model' -EncodedValue (ConvertTo-TomlBasicString $model)
-Set-TopLevelTomlValue -Lines $configLines -Key 'model_provider' -EncodedValue (ConvertTo-TomlBasicString $ProviderId)
 Set-TopLevelTomlValue -Lines $configLines -Key 'model_reasoning_effort' -EncodedValue (ConvertTo-TomlBasicString $effort)
+Set-TopLevelTomlValue -Lines $configLines -Key 'model_provider' -EncodedValue (ConvertTo-TomlBasicString $ProviderId)
+Remove-TopLevelTomlValue -Lines $configLines -Key 'service_tier'
 
 $providerTable = 'model_providers.' + $ProviderId
 if ($Mode -eq 'account') {
-    Remove-TomlTable -Lines $configLines -TableName 'model_providers.codex'
+    Remove-TomlTable -Lines $configLines -TableName 'model_providers.CODEX'
 }
 else {
     Remove-TomlTable -Lines $configLines -TableName 'model_providers.CODEX'
@@ -720,14 +737,14 @@ Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'base_url'
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'env_key' -EncodedValue (ConvertTo-TomlBasicString $ApiKeyVariable)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'wire_api' -EncodedValue (ConvertTo-TomlBasicString 'responses')
 if ($Mode -eq 'account') {
-    Set-TopLevelTomlValue -Lines $configLines -Key 'service_tier' -EncodedValue (ConvertTo-TomlBasicString 'default')
     Remove-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json'
-    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_websockets' -EncodedValue 'false'
-    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'requires_openai_auth' -EncodedValue 'true'
+    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_websockets' -EncodedValue $ProviderWebsocketsValue
+    Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'requires_openai_auth' -EncodedValue $ProviderRequiresAuthValue
 }
 else {
     Set-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json' -EncodedValue (ConvertTo-TomlBasicString $targetCatalogPath)
-    Remove-TopLevelTomlValue -Lines $configLines -Key 'service_tier'
+    Remove-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_websockets'
+    Remove-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'requires_openai_auth'
 }
 
 $configContent = [string]::Join([Environment]::NewLine, $configLines)
@@ -779,8 +796,8 @@ Write-JsonAtomic -Path $statePath -Value $state
 
 Write-Host ''
 if ($Mode -eq 'account') {
-    Write-Host 'Codex account-authenticated custom endpoint installation completed.'
-    Write-Host 'Native Codex/OpenAI login was verified.'
+    Write-Host 'Codex native-catalog custom endpoint installation completed.'
+    Write-Host 'Codex/OpenAI login was not checked by the installer.'
 }
 else {
     Write-Host 'Codex custom endpoint installation completed.'

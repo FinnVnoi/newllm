@@ -27,7 +27,7 @@ usage() {
         '' \
         'Without arguments, the installer prompts for mode, endpoint, API key, model, and effort.' \
         '--non-interactive requires --mode and uses the bundled defaults.' \
-        '--doctor checks the saved mode, config, login, and API key loading without printing the key.'
+        '--doctor checks the saved mode, config, and API key loading without printing the key.'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -175,7 +175,7 @@ read_install_mode() {
 
     printf '%s\n' 'Select installation mode:' >&2
     printf '%s\n' '  1. custom-endpoint - Use the current custom endpoint behavior without native login.' >&2
-    printf '%s\n' '  2. account         - Require Codex/OpenAI login and enable account-authenticated features.' >&2
+    printf '%s\n' '  2. account         - Use the native model catalog with a custom endpoint; login is not checked by the installer.' >&2
     printf 'Mode [1]: ' >&2
     IFS= read -r selection || die 'Could not read installation mode.'
     case "$selection" in
@@ -183,15 +183,6 @@ read_install_mode() {
         2) printf '%s\n' 'account' ;;
         *) die 'Mode must be 1 (custom-endpoint) or 2 (account).' ;;
     esac
-}
-
-assert_account_login() {
-    command -v codex >/dev/null 2>&1 || die 'Account mode requires the Codex CLI. Install Codex or run this from a terminal where codex is available, then run codex login.'
-    codex login status >/dev/null 2>&1 || die 'Account mode requires an active Codex/OpenAI login. Run codex login (or sign in through Codex App), then run the installer again.'
-}
-
-test_account_login() {
-    command -v codex >/dev/null 2>&1 && codex login status >/dev/null 2>&1
 }
 
 read_with_default() {
@@ -360,7 +351,6 @@ write_config() {
     provider_wire_line="wire_api = $(toml_quote 'responses')"
     provider_websocket_line='supports_websockets = false'
     provider_auth_line='requires_openai_auth = true'
-    service_tier_line="service_tier = $(toml_quote 'default')"
     config_input="$CONFIG_PATH"
     [ -f "$config_input" ] || config_input='/dev/null'
     config_temporary_path="$(mktemp "$CODEX_HOME_PATH/.config.toml.XXXXXX")"
@@ -375,16 +365,14 @@ write_config() {
     PROVIDER_WIRE_LINE="$provider_wire_line" \
     PROVIDER_WEBSOCKET_LINE="$provider_websocket_line" \
     PROVIDER_AUTH_LINE="$provider_auth_line" \
-    SERVICE_TIER_LINE="$service_tier_line" \
     INSTALL_MODE="$MODE" \
     PROVIDER_ID="$PROVIDER_ID" \
     LC_ALL=C awk '
         function emit_missing_top() {
             if (!seen_model) print ENVIRON["MODEL_LINE"]
-            if (!seen_provider) print ENVIRON["PROVIDER_LINE"]
             if (!seen_effort) print ENVIRON["EFFORT_LINE"]
+            if (!seen_provider) print ENVIRON["PROVIDER_LINE"]
             if (ENVIRON["INSTALL_MODE"] == "custom-endpoint" && !seen_catalog) print ENVIRON["CATALOG_LINE"]
-            if (ENVIRON["INSTALL_MODE"] == "account" && !seen_service_tier) print ENVIRON["SERVICE_TIER_LINE"]
         }
         function emit_missing_provider() {
             if (!seen_provider_name) print ENVIRON["PROVIDER_NAME_LINE"]
@@ -442,8 +430,6 @@ write_config() {
                     next
                 }
                 if (line ~ /^[[:space:]]*service_tier[[:space:]]*=/) {
-                    if (ENVIRON["INSTALL_MODE"] == "account" && !seen_service_tier) print ENVIRON["SERVICE_TIER_LINE"]
-                    seen_service_tier = 1
                     next
                 }
                 print line
@@ -626,19 +612,12 @@ run_doctor() {
         doctor_ok=0
     fi
 
-    if [ "$MODE" = 'account' ] && test_account_login; then
-        printf 'Native Codex/OpenAI login: active\n'
-    elif [ "$MODE" = 'account' ]; then
-        printf 'Native Codex/OpenAI login: missing or inactive\n'
-        doctor_ok=0
-    fi
-
     if [ "$MODE" = 'account' ] && [ -f "$CONFIG_PATH" ] &&
-        grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"CODEX"' "$CONFIG_PATH" &&
-        grep -Eq '^[[:space:]]*requires_openai_auth[[:space:]]*=[[:space:]]*true' "$CONFIG_PATH" &&
-        grep -Eq '^[[:space:]]*base_url[[:space:]]*=[[:space:]]*"https?://' "$CONFIG_PATH" &&
+        grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"codex"' "$CONFIG_PATH" &&
+        awk '/^[[:space:]]*\[model_providers\.codex\][[:space:]]*$/ { provider=1; next } /^[[:space:]]*\[/ { provider=0 } provider && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"openai"/ { name=1 } provider && /^[[:space:]]*base_url[[:space:]]*=[[:space:]]*"https?:\/\// { url=1 } provider && /^[[:space:]]*env_key[[:space:]]*=[[:space:]]*"CODEX_API_KEY"/ { key=1 } provider && /^[[:space:]]*wire_api[[:space:]]*=[[:space:]]*"responses"/ { wire=1 } provider && /^[[:space:]]*supports_websockets[[:space:]]*=[[:space:]]*false/ { ws=1 } provider && /^[[:space:]]*requires_openai_auth[[:space:]]*=[[:space:]]*true/ { auth=1 } END { exit !(name && url && key && wire && ws && auth) }' "$CONFIG_PATH" &&
+        ! grep -Eq '^[[:space:]]*service_tier[[:space:]]*=' "$CONFIG_PATH" &&
         ! grep -Eq '^[[:space:]]*model_catalog_json[[:space:]]*=' "$CONFIG_PATH"; then
-        printf 'Codex provider config: configured for account mode\n'
+        printf 'Codex provider config: configured for native-catalog mode\n'
     elif [ "$MODE" = 'custom-endpoint' ] && [ -f "$CONFIG_PATH" ] &&
         grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"codex"' "$CONFIG_PATH" &&
         grep -Eq '^[[:space:]]*model_catalog_json[[:space:]]*=' "$CONFIG_PATH" &&
@@ -680,8 +659,7 @@ if [ "$MODE_SET" -eq 0 ]; then
     MODE="$(read_install_mode)"
 fi
 if [ "$MODE" = 'account' ]; then
-    assert_account_login
-    PROVIDER_ID='CODEX'
+    PROVIDER_ID='codex'
     PROVIDER_NAME='openai'
 else
     PROVIDER_ID='codex'
@@ -809,9 +787,9 @@ fi
 
 if [ "$MODE" = 'account' ]; then
     remove_top_level_key 'model_catalog_json'
-    remove_provider_table 'codex'
-else
     remove_top_level_key 'service_tier'
+    remove_provider_table 'CODEX'
+else
     remove_provider_table 'CODEX'
 fi
 write_config
@@ -843,8 +821,8 @@ INSTALLED_ENV_SHA256="$(sha256_file "$ENV_FILE_PATH")"
 write_state
 
 if [ "$MODE" = 'account' ]; then
-    printf '\nCodex account-authenticated custom endpoint installation completed.\n'
-    printf 'Native Codex/OpenAI login was verified.\n'
+    printf '\nCodex native-catalog custom endpoint installation completed.\n'
+    printf 'Codex/OpenAI login was not checked by the installer.\n'
 else
     printf '\nCodex custom endpoint installation completed.\n'
 fi

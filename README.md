@@ -3,7 +3,7 @@
 Cross-platform installers for configuring a FinnVnoi Codex endpoint in one of two modes:
 
 - `custom-endpoint`: the current behavior, with no ChatGPT/Codex login requirement and the bundled local model catalog.
-- `account`: the same endpoint, API key, model, and reasoning prompts, but requires an active native Codex/OpenAI login and uses the native catalog so account-enabled features can roll out.
+- `account`: the same endpoint, API key, model, and reasoning prompts, uses the native model catalog, and does not require a login check during installation.
 
 - Windows: `codex_install.ps1` / `codex_uninstall.ps1`
 - Linux and macOS, including Bash, Zsh, and Fish: `codex_install.sh` / `codex_uninstall.sh`
@@ -47,7 +47,7 @@ Run PowerShell in the repository directory:
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-The installer first asks for a mode, then prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt. In `custom-endpoint`, an unknown model also gets a display-name prompt and is added to the installed catalog. In `account`, sign in first with Codex App or `codex login`; the installer verifies the login and leaves model discovery to native Codex.
+The installer first asks for a mode, then prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt. In `custom-endpoint`, an unknown model also gets a display-name prompt and is added to the installed catalog. In `account`, the installer does not check login; it leaves model discovery to native Codex while routing requests to the configured endpoint.
 
 Select a mode explicitly when scripting:
 
@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode custom-endpoi
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode account
 ```
 
-Use `-Doctor` to check the active mode, config, environment, and native login when applicable:
+Use `-Doctor` to check the active mode, config, and environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Doctor
@@ -96,7 +96,7 @@ To select a mode explicitly:
 ./codex_install.sh --mode account
 ```
 
-`account` mode requires an active native login from Codex App or `codex login`. It still asks for and stores the configured endpoint and `CODEX_API_KEY`, but does not enable the local catalog override.
+`account` mode does not require a login check during installation. It still asks for and stores the configured endpoint and `CODEX_API_KEY`, but does not enable the local catalog override. The generated provider keeps `requires_openai_auth = true` exactly as shown below, so the Codex runtime may still use native authentication when making requests.
 
 Only if you want to keep using the terminal that was already open during installation, run this once:
 
@@ -146,7 +146,7 @@ If Codex reports `invalid_api_key`, run:
 ./codex_install.sh --doctor
 ```
 
-The diagnostic detects the installed mode. It checks native login in `account` mode, checks the local catalog provider in `custom-endpoint` mode, and reports whether the key is loaded without printing it. If all checks pass but the endpoint still reports `invalid_api_key`, close and reopen Codex, then restart the device if needed; rerun the installer only if the issue persists. On Arch Linux with Fish, rerun the latest installer once so it can migrate the managed block from `.profile` to Fish's `conf.d` directory.
+The diagnostic detects the installed mode. It checks the native-catalog provider configuration in `account` mode, checks the local catalog provider in `custom-endpoint` mode, and reports whether the key is loaded without printing it. If all checks pass but the endpoint still reports `invalid_api_key`, close and reopen Codex, then restart the device if needed; rerun the installer only if the issue persists. On Arch Linux with Fish, rerun the latest installer once so it can migrate the managed block from `.profile` to Fish's `conf.d` directory.
 
 ### What the installer changes
 
@@ -170,19 +170,18 @@ wire_api = "responses"
 ```toml
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
-model_provider = "CODEX"
-service_tier = "default"
+model_provider = "codex"
 
-[model_providers.CODEX]
+[model_providers.codex]
 name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
-wire_api = "responses"
 env_key = "CODEX_API_KEY"
+wire_api = "responses"
 supports_websockets = false
 requires_openai_auth = true
 ```
 
-This mode does not set `model_catalog_json`, so the available models and features come from native Codex, subject to the signed-in account, workspace, and rollout.
+This mode does not set `model_catalog_json`, so model discovery uses the native Codex catalog. `requires_openai_auth = true` means an active native Codex/OpenAI login is required. Available models and features still depend on the account and rollout.
 
 It also persists:
 
@@ -221,7 +220,7 @@ Mở PowerShell tại thư mục repository và chạy:
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-Installer sẽ hỏi mode trước, sau đó yêu cầu nhập endpoint, API key, model và reasoning effort. Nhấn Enter để dùng giá trị mặc định hiển thị trên màn hình. `custom-endpoint` giữ hành vi hiện tại, còn `account` yêu cầu đăng nhập Codex/OpenAI native và dùng catalog native để nhận các tính năng được account hỗ trợ. Ở `custom-endpoint`, model mới vẫn được hỏi tên hiển thị và thêm vào catalog cài đặt.
+Installer sẽ hỏi mode trước, sau đó yêu cầu nhập endpoint, API key, model và reasoning effort. Nhấn Enter để dùng giá trị mặc định hiển thị trên màn hình. `custom-endpoint` giữ hành vi hiện tại; `account` dùng catalog native và không kiểm tra đăng nhập khi cài đặt. Ở `custom-endpoint`, model mới vẫn được hỏi tên hiển thị và thêm vào catalog cài đặt.
 
 Chọn mode rõ ràng:
 
@@ -230,7 +229,7 @@ powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode custom-endpoi
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode account
 ```
 
-Ở `account`, hãy đăng nhập bằng Codex App hoặc chạy `codex login` trước khi cài. Dùng `-Doctor` để kiểm tra mode, config, môi trường và trạng thái đăng nhập.
+Mode `account` không kiểm tra đăng nhập khi cài đặt. Dùng `-Doctor` để kiểm tra mode, config và môi trường. Provider vẫn giữ `requires_openai_auth = true` theo đúng format bên dưới, nên Codex runtime có thể vẫn cần native authentication khi gửi request.
 
 Gỡ cài đặt và khôi phục trạng thái ban đầu:
 
@@ -254,7 +253,7 @@ chmod +x codex_install.sh codex_uninstall.sh
 ./codex_install.sh
 ```
 
-Chọn mode rõ ràng bằng `./codex_install.sh --mode custom-endpoint` hoặc `./codex_install.sh --mode account`. Mode `account` vẫn hỏi và lưu endpoint cùng `CODEX_API_KEY`, nhưng không bật catalog local và cần đăng nhập native trước.
+Chọn mode rõ ràng bằng `./codex_install.sh --mode custom-endpoint` hoặc `./codex_install.sh --mode account`. Mode `account` vẫn hỏi và lưu endpoint cùng `CODEX_API_KEY`, không bật catalog local và không kiểm tra login khi cài đặt.
 
 Installer cập nhật `~/.codex` và thêm một block có đánh dấu vào `~/.bashrc`. Với Zsh, installer dùng `~/.zshrc`; với Fish, installer dùng `~/.config/fish/conf.d/codex-custom-endpoint.fish`; với shell POSIX khác, installer dùng `~/.profile`. Mọi terminal mở sau khi cài đặt sẽ tự động có các biến này.
 
@@ -306,7 +305,7 @@ Nếu Codex báo `invalid_api_key`, hãy chạy:
 ./codex_install.sh --doctor
 ```
 
-Chế độ chẩn đoán tự nhận mode đã cài. Nó kiểm tra đăng nhập native ở mode `account`, kiểm tra provider/catalog local ở mode `custom-endpoint` và chỉ hiển thị số ký tự key, không in key. Nếu mọi kiểm tra đều ổn nhưng vẫn gặp `invalid_api_key`, hãy đóng mở lại Codex rồi khởi động lại thiết bị; chỉ chạy lại installer nếu lỗi vẫn còn. Trên Arch Linux dùng Fish, hãy chạy lại installer mới một lần để managed block được chuyển từ `.profile` sang thư mục `conf.d` của Fish.
+Chế độ chẩn đoán tự nhận mode đã cài. Nó kiểm tra provider/catalog native ở mode `account`, kiểm tra provider/catalog local ở mode `custom-endpoint` và chỉ hiển thị số ký tự key, không in key. Nếu mọi kiểm tra đều ổn nhưng vẫn gặp `invalid_api_key`, hãy đóng mở lại Codex rồi khởi động lại thiết bị; chỉ chạy lại installer nếu lỗi vẫn còn. Trên Arch Linux dùng Fish, hãy chạy lại installer mới một lần để managed block được chuyển từ `.profile` sang thư mục `conf.d` của Fish.
 
 ### Installer thay đổi những gì
 
@@ -330,19 +329,18 @@ Mode `account` ghi provider theo dạng sau; endpoint, API key, model và reason
 ```toml
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
-model_provider = "CODEX"
-service_tier = "default"
+model_provider = "codex"
 
-[model_providers.CODEX]
+[model_providers.codex]
 name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
-wire_api = "responses"
 env_key = "CODEX_API_KEY"
+wire_api = "responses"
 supports_websockets = false
 requires_openai_auth = true
 ```
 
-Mode này không ghi `model_catalog_json`, vì vậy model và tính năng thực tế phụ thuộc account, workspace và rollout của Codex native.
+Mode này không ghi `model_catalog_json` nên dùng catalog native của Codex. `requires_openai_auth = true` nghĩa là phải đăng nhập Codex/OpenAI native; model và tính năng thực tế vẫn phụ thuộc account và rollout.
 
 Các biến môi trường được lưu:
 
