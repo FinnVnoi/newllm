@@ -548,7 +548,10 @@ if ($Doctor) {
                 $doctorConfig -cnotmatch '(?m)^\s*model_catalog_json\s*='
         }
         else {
+            $customProvider = [regex]::Match($doctorConfig, '(?ms)^\s*\[model_providers\.codex\]\s*(?:#.*)?\r?\n(?<body>.*?)(?=^\s*\[|\z)')
             $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"codex"' -and
+                $customProvider.Success -and
+                $customProvider.Groups['body'].Value -match '(?m)^\s*name\s*=\s*"openai"' -and
                 $doctorConfig -match '(?m)^\s*model_catalog_json\s*=' -and
                 $doctorConfig -match '(?m)^\s*env_key\s*=\s*"CODEX_API_KEY"'
         }
@@ -596,7 +599,7 @@ if ($Mode -eq 'account') {
 }
 else {
     $ProviderId = 'codex'
-    $ProviderName = 'CODEX'
+    $ProviderName = 'openai'
 }
 $ProviderWebsocketsValue = if ($Mode -eq 'account') { 'false' } else { $null }
 $ProviderRequiresAuthValue = if ($Mode -eq 'account') { 'true' } else { $null }

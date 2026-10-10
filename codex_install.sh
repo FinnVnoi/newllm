@@ -621,6 +621,7 @@ run_doctor() {
     elif [ "$MODE" = 'custom-endpoint' ] && [ -f "$CONFIG_PATH" ] &&
         grep -Eq '^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"codex"' "$CONFIG_PATH" &&
         grep -Eq '^[[:space:]]*model_catalog_json[[:space:]]*=' "$CONFIG_PATH" &&
+        awk '/^[[:space:]]*\[model_providers\.codex\][[:space:]]*$/ { provider=1; next } /^[[:space:]]*\[/ { provider=0 } provider && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"openai"/ { name=1 } END { exit !name }' "$CONFIG_PATH" &&
         grep -Eq '^[[:space:]]*env_key[[:space:]]*=[[:space:]]*"CODEX_API_KEY"' "$CONFIG_PATH"; then
         printf 'Codex provider config: configured\n'
     else
@@ -663,7 +664,7 @@ if [ "$MODE" = 'account' ]; then
     PROVIDER_NAME='openai'
 else
     PROVIDER_ID='codex'
-    PROVIDER_NAME='CODEX'
+    PROVIDER_NAME='openai'
 fi
 
 if [ "$MODE" = 'custom-endpoint' ] && [ -f "$BUNDLED_CATALOG_PATH" ]; then

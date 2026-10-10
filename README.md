@@ -159,7 +159,7 @@ model_reasoning_effort = "xhigh"
 model_catalog_json = "/absolute/path/to/.codex/legacy_direct_model_catalog.json"
 
 [model_providers.codex]
-name = "CODEX"
+name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
@@ -182,6 +182,8 @@ requires_openai_auth = true
 ```
 
 This mode does not set `model_catalog_json`, so model discovery uses the native Codex catalog. `requires_openai_auth = true` means an active native Codex/OpenAI login is required. Available models and features still depend on the account and rollout.
+
+If the ChatGPT account or workspace reaches its Codex usage limit, the native account session can be paused. This installer does not provide an automatic quota fallback: with `requires_openai_auth = true`, Codex ignores `env_key`. To continue with API-key or gateway usage, switch to `custom-endpoint` and enter a key accepted by the endpoint; that mode uses the local catalog and the endpoint's own quota.
 
 It also persists:
 
@@ -318,7 +320,7 @@ model_reasoning_effort = "xhigh"
 model_catalog_json = "/duong-dan-tuyet-doi/.codex/legacy_direct_model_catalog.json"
 
 [model_providers.codex]
-name = "CODEX"
+name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
@@ -341,6 +343,8 @@ requires_openai_auth = true
 ```
 
 Mode này không ghi `model_catalog_json` nên dùng catalog native của Codex. `requires_openai_auth = true` nghĩa là phải đăng nhập Codex/OpenAI native; model và tính năng thực tế vẫn phụ thuộc account và rollout.
+
+Nếu account hoặc workspace ChatGPT hết quota Codex, phiên native có thể bị tạm dừng. Installer không tự fallback quota: khi `requires_openai_auth = true`, Codex bỏ qua `env_key`. Muốn tiếp tục bằng API key hoặc gateway, hãy chuyển sang `custom-endpoint` và nhập key được endpoint chấp nhận; mode này dùng catalog local và quota riêng của endpoint.
 
 Các biến môi trường được lưu:
 
