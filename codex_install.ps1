@@ -542,6 +542,7 @@ if ($Doctor) {
                 $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*base_url\s*=\s*"https?://' -and
                 $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*env_key\s*=\s*"CODEX_API_KEY"' -and
                 $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*wire_api\s*=\s*"responses"' -and
+                $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*supports_standalone_web_search\s*=\s*true' -and
                 $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*supports_websockets\s*=\s*false' -and
                 $accountProvider.Groups['body'].Value -cmatch '(?m)^\s*requires_openai_auth\s*=\s*true' -and
                 $doctorConfig -cnotmatch '(?m)^\s*service_tier\s*=' -and
@@ -552,6 +553,7 @@ if ($Doctor) {
             $configOk = $doctorConfig -match '(?m)^\s*model_provider\s*=\s*"codex"' -and
                 $customProvider.Success -and
                 $customProvider.Groups['body'].Value -match '(?m)^\s*name\s*=\s*"openai"' -and
+                $customProvider.Groups['body'].Value -match '(?m)^\s*supports_standalone_web_search\s*=\s*true' -and
                 $doctorConfig -match '(?m)^\s*model_catalog_json\s*=' -and
                 $doctorConfig -match '(?m)^\s*env_key\s*=\s*"CODEX_API_KEY"'
         }
@@ -739,6 +741,7 @@ Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'name' -En
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'base_url' -EncodedValue (ConvertTo-TomlBasicString $endpoint)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'env_key' -EncodedValue (ConvertTo-TomlBasicString $ApiKeyVariable)
 Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'wire_api' -EncodedValue (ConvertTo-TomlBasicString 'responses')
+Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_standalone_web_search' -EncodedValue 'true'
 if ($Mode -eq 'account') {
     Remove-TopLevelTomlValue -Lines $configLines -Key 'model_catalog_json'
     Set-TableTomlValue -Lines $configLines -TableName $providerTable -Key 'supports_websockets' -EncodedValue $ProviderWebsocketsValue

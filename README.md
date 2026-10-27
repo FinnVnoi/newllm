@@ -163,6 +163,7 @@ name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
+supports_standalone_web_search = true
 ```
 
 `account` mode writes the following provider shape instead. The endpoint, API key variable, model, and reasoning effort are still selected by the installer:
@@ -177,9 +178,12 @@ name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
+supports_standalone_web_search = true
 supports_websockets = false
 requires_openai_auth = true
 ```
+
+The provider capability allows Codex to use a compatible standalone web-search endpoint. To request live search explicitly, also set `web_search = "live"` in the top-level config. The provider, selected model, runtime, and workspace policy must support the feature.
 
 This mode does not set `model_catalog_json`, so model discovery uses the native Codex catalog. `requires_openai_auth = true` means an active native Codex/OpenAI login is required. Available models and features still depend on the account and rollout.
 
@@ -324,6 +328,7 @@ name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
+supports_standalone_web_search = true
 ```
 
 Mode `account` ghi provider theo dạng sau; endpoint, API key, model và reasoning effort vẫn do installer hỏi giống mode còn lại:
@@ -338,9 +343,12 @@ name = "openai"
 base_url = "https://codex.finnvnoi.top/backend-api/codex"
 env_key = "CODEX_API_KEY"
 wire_api = "responses"
+supports_standalone_web_search = true
 supports_websockets = false
 requires_openai_auth = true
 ```
+
+Capability `supports_standalone_web_search = true` cho phép Codex dùng endpoint tìm kiếm độc lập tương thích. Muốn yêu cầu tìm kiếm live, hãy thêm `web_search = "live"` ở cấp config; provider, model, runtime và policy của workspace vẫn phải hỗ trợ tính năng này.
 
 Mode này không ghi `model_catalog_json` nên dùng catalog native của Codex. `requires_openai_auth = true` nghĩa là phải đăng nhập Codex/OpenAI native; model và tính năng thực tế vẫn phụ thuộc account và rollout.
 

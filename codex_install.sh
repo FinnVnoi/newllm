@@ -349,6 +349,7 @@ write_config() {
     provider_url_line="base_url = $(toml_quote "$ENDPOINT")"
     provider_env_line="env_key = $(toml_quote "$API_KEY_VARIABLE")"
     provider_wire_line="wire_api = $(toml_quote 'responses')"
+    provider_web_search_line='supports_standalone_web_search = true'
     provider_websocket_line='supports_websockets = false'
     provider_auth_line='requires_openai_auth = true'
     config_input="$CONFIG_PATH"
@@ -363,6 +364,7 @@ write_config() {
     PROVIDER_URL_LINE="$provider_url_line" \
     PROVIDER_ENV_LINE="$provider_env_line" \
     PROVIDER_WIRE_LINE="$provider_wire_line" \
+    PROVIDER_WEB_SEARCH_LINE="$provider_web_search_line" \
     PROVIDER_WEBSOCKET_LINE="$provider_websocket_line" \
     PROVIDER_AUTH_LINE="$provider_auth_line" \
     INSTALL_MODE="$MODE" \
@@ -379,6 +381,7 @@ write_config() {
             if (!seen_provider_url) print ENVIRON["PROVIDER_URL_LINE"]
             if (!seen_provider_env) print ENVIRON["PROVIDER_ENV_LINE"]
             if (!seen_provider_wire) print ENVIRON["PROVIDER_WIRE_LINE"]
+            if (!seen_provider_web_search) print ENVIRON["PROVIDER_WEB_SEARCH_LINE"]
             if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_websocket) print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
             if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_auth) print ENVIRON["PROVIDER_AUTH_LINE"]
         }
@@ -457,6 +460,11 @@ write_config() {
                     seen_provider_wire = 1
                     next
                 }
+                if (line ~ /^[[:space:]]*supports_standalone_web_search[[:space:]]*=/) {
+                    if (!seen_provider_web_search) print ENVIRON["PROVIDER_WEB_SEARCH_LINE"]
+                    seen_provider_web_search = 1
+                    next
+                }
                 if (line ~ /^[[:space:]]*supports_websockets[[:space:]]*=/) {
                     if (ENVIRON["INSTALL_MODE"] == "account" && !seen_provider_websocket) print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
                     seen_provider_websocket = 1
@@ -484,6 +492,7 @@ write_config() {
                 print ENVIRON["PROVIDER_URL_LINE"]
                 print ENVIRON["PROVIDER_ENV_LINE"]
                 print ENVIRON["PROVIDER_WIRE_LINE"]
+                print ENVIRON["PROVIDER_WEB_SEARCH_LINE"]
                 if (ENVIRON["INSTALL_MODE"] == "account") {
                     print ENVIRON["PROVIDER_WEBSOCKET_LINE"]
                     print ENVIRON["PROVIDER_AUTH_LINE"]
@@ -609,6 +618,19 @@ run_doctor() {
     fi
     if [ "$doctor_profile_path" != "$desired_profile_path" ]; then
         printf 'Shell profile migration needed: %s\n' "$desired_profile_path"
+        doctor_ok=0
+    fi
+
+    if [ -f "$CONFIG_PATH" ] &&
+        awk '
+            /^[[:space:]]*\[model_providers\.codex\][[:space:]]*(#.*)?$/ { provider=1; next }
+            /^[[:space:]]*\[/ { provider=0 }
+            provider && /^[[:space:]]*supports_standalone_web_search[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$/ { found=1 }
+            END { exit !found }
+        ' "$CONFIG_PATH"; then
+        printf 'Standalone web search capability: configured\n'
+    else
+        printf 'Standalone web search capability: missing or disabled; rerun the installer\n'
         doctor_ok=0
     fi
 
