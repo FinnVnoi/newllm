@@ -3,6 +3,7 @@ param(
     [switch]$NonInteractive,
     [ValidateSet('account', 'custom-endpoint')]
     [string]$Mode,
+    [switch]$FVCodex,
     [switch]$Doctor
 )
 
@@ -506,6 +507,31 @@ public static class CodexEnvironmentBroadcast
     )
 }
 
+function Get-RunningCodexProcesses {
+    return @(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue)
+}
+
+function Stop-CodexBeforeInstall {
+    # Force array semantics: PowerShell unwraps a single pipeline result into
+    # one process object, which has no .Count property under StrictMode.
+    $running = @(Get-RunningCodexProcesses)
+    if ($running.Count -eq 0) {
+        Write-Host 'Codex is not running. Continuing installation.' -ForegroundColor Green
+        return
+    }
+
+    Write-Host ''
+    Write-Host ('Codex is still running (' + $running.Count + ' process(es)).') -ForegroundColor Yellow
+    Write-Host 'The installation will close all Codex processes before changing files.' -ForegroundColor Yellow
+    if (-not $NonInteractive) {
+        Write-Host 'Press any key to begin installation and close Codex...' -ForegroundColor Yellow
+        [void][Console]::ReadKey($true)
+    }
+    Write-Host 'Closing Codex...'
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}
+
 $codexHome = Get-CodexHome
 $configPath = Join-Path $codexHome 'config.toml'
 $targetCatalogPath = Join-Path $codexHome $TargetCatalogName
@@ -595,6 +621,20 @@ if ($Doctor) {
 }
 
 $Mode = Read-InstallMode
+$InstallFVCodex = $false
+if ($FVCodex -and $Mode -ne 'account') {
+    throw '-FVCodex requires -Mode account. FVCodex is installed after account-mode configuration.'
+}
+if ($Mode -eq 'account' -and $FVCodex) {
+    $InstallFVCodex = $true
+}
+elseif ($Mode -eq 'account' -and -not $NonInteractive) {
+    Write-Host ''
+    Write-Host 'FVCodex is a portable Codex desktop build with enhanced OpenAI-compatible endpoint support.'
+    Write-Host 'It does not modify or replace the original Codex app.'
+    $fvcodexChoice = Read-Host 'Would you like to install and configure FVCodex as well? [y/N]'
+    $InstallFVCodex = $fvcodexChoice -match '^(y|yes)$'
+}
 if ($Mode -eq 'account') {
     $ProviderId = 'codex'
     $ProviderName = 'openai'
@@ -654,6 +694,10 @@ if ($null -ne $modelDisplayName -and [string]::IsNullOrWhiteSpace($modelDisplayN
 }
 if ([string]::IsNullOrWhiteSpace($effort)) {
     throw 'Reasoning effort cannot be empty.'
+}
+
+if ($Mode -eq 'custom-endpoint') {
+    Stop-CodexBeforeInstall
 }
 
 if (-not (Test-Path -LiteralPath $codexHome -PathType Container)) {
@@ -789,6 +833,96 @@ foreach ($entry in $environmentValues.GetEnumerator()) {
 }
 Broadcast-EnvironmentChange
 
+function Patch-VsCodeForAccount {
+    param(
+        [Parameter(Mandatory = $true)][string]$FVCodexScript
+    )
+
+    Write-Host ''
+    Write-Host 'Patching the VS Code Codex extension for account mode...' -ForegroundColor Cyan
+    & node $FVCodexScript "--root=$scriptDirectory" '--vscode-patch'
+    if ($LASTEXITCODE -ne 0) {
+        throw "VS Code Codex extension patch failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Ensure-CodexMsixInstalled {
+    param(
+        [Parameter(Mandatory = $true)][string]$FVCodexScript
+    )
+
+    $probe = & node $FVCodexScript "--root=$scriptDirectory" '--doctor' 2>&1 | Out-String
+    if ($probe -match 'MSIX:\s*(?<path>[^\r\n]+)' -and $Matches.path.Trim() -and $Matches.path.Trim() -ne 'khong thay') {
+        return
+    }
+
+    Write-Host ''
+    Write-Host 'Codex desktop (MSIX) is not installed, so FVCodex cannot be built yet.' -ForegroundColor Yellow
+    if ($NonInteractive) {
+        throw 'Codex desktop MSIX is not installed. Install Codex from Microsoft Store, then run this installer again.'
+    }
+
+    $choice = Read-Host 'Try to install the official Codex desktop app automatically with winget? [Y/n]'
+    if ($choice -match '^(|y|yes)$') {
+        Write-Host 'Installing official Codex desktop app from Microsoft Store via winget...' -ForegroundColor Cyan
+        & winget install --id 9PLM9XGG6VKS --source msstore --accept-source-agreements --accept-package-agreements --silent
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'winget installation did not complete. Opening Microsoft Store instead...' -ForegroundColor Yellow
+            Start-Process 'ms-windows-store://pdp/?PFN=OpenAI.Codex_2p2nqsd0c76g0' | Out-Null
+        }
+    }
+    else {
+        Start-Process 'ms-windows-store://pdp/?PFN=OpenAI.Codex_2p2nqsd0c76g0' | Out-Null
+    }
+
+    Write-Host 'Install the official Codex desktop app in Microsoft Store, then return here.' -ForegroundColor Cyan
+    [void](Read-Host 'Press Enter after the installation has completed')
+
+    $probe = & node $FVCodexScript "--root=$scriptDirectory" '--doctor' 2>&1 | Out-String
+    if ($probe -notmatch 'MSIX:\s*(?<path>[^\r\n]+)' -or [string]::IsNullOrWhiteSpace($Matches.path) -or $Matches.path.Trim() -eq 'khong thay') {
+        throw 'Codex desktop MSIX was still not detected. Install it from Microsoft Store and run the installer again.'
+    }
+}
+
+function Install-FVCodexPortable {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$ApiKey,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [Parameter(Mandatory = $true)][string]$Effort
+    )
+
+    $fvcodexScript = Join-Path $scriptDirectory 'fvcodex-patch.js'
+    if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
+        throw "FVCodex installer is missing: $fvcodexScript"
+    }
+
+    Ensure-CodexMsixInstalled -FVCodexScript $fvcodexScript
+    Stop-CodexBeforeInstall
+
+    $env:CODEX_BASE_URL = $BaseUrl
+    $env:OAIC_USAGE_BASE_URL = $BaseUrl
+    $env:CODEX_API_KEY = $ApiKey
+    $env:CODEX_MODEL = $Model
+    $env:CODEX_REASONING_EFFORT = $Effort
+
+    Write-Host ''
+    Write-Host 'Installing FVCodex portable build...' -ForegroundColor Cyan
+    # --no-vscode: the account-mode VS Code patch was already applied above and
+    # must not be re-counted or duplicated by the FVCodex installer.
+    & node $fvcodexScript "--root=$scriptDirectory" '--mode=portable' '--no-launch' '--no-vscode'
+    if ($LASTEXITCODE -ne 0) {
+        throw "FVCodex installation failed with exit code $LASTEXITCODE."
+    }
+
+    $portablePath = Join-Path $env:LOCALAPPDATA 'FVCodex\portable\app\ChatGPT.exe'
+    Write-Host ''
+    Write-Host 'FVCodex installation completed.' -ForegroundColor Green
+    Write-Host ('Shortcut: ' + (Join-Path ([Environment]::GetFolderPath('Desktop')) 'FVCodex.lnk'))
+    Write-Host ('Portable app: ' + $portablePath)
+    Write-Host 'Please open FVCodex from the Desktop shortcut, or use the portable path above.'
+}
+
 $state.lastInstalledAt = (Get-Date).ToString('o')
 if ($state.PSObject.Properties.Name -contains 'mode') {
     $state.mode = $Mode
@@ -799,6 +933,16 @@ else {
 $state.installedConfigSha256 = Get-Sha256 -Path $configPath
 $state.installedCatalogSha256 = if (Test-Path -LiteralPath $targetCatalogPath -PathType Leaf) { Get-Sha256 -Path $targetCatalogPath } else { $null }
 Write-JsonAtomic -Path $statePath -Value $state
+
+# Account mode always patches the VS Code Codex extension, independent of the
+# FVCodex choice. custom-endpoint must never touch the VS Code extension.
+if ($Mode -eq 'account') {
+    $vsCodeScript = Join-Path $scriptDirectory 'fvcodex-patch.js'
+    if (-not (Test-Path -LiteralPath $vsCodeScript -PathType Leaf)) {
+        throw "VS Code patch script is missing: $vsCodeScript"
+    }
+    Patch-VsCodeForAccount -FVCodexScript $vsCodeScript
+}
 
 Write-Host ''
 if ($Mode -eq 'account') {
@@ -817,3 +961,7 @@ else {
 }
 Write-Host 'User environment variables: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MODEL, CODEX_REASONING_EFFORT'
 Write-Host 'To apply these changes, close all running Codex applications and reopen them.'
+
+if ($InstallFVCodex) {
+    Install-FVCodexPortable -BaseUrl $endpoint -ApiKey $apiKey -Model $model -Effort $effort
+}

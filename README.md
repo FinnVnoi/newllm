@@ -1,9 +1,102 @@
 # Codex custom endpoint installer
 
+## FVCodex desktop and VS Code integration
+
+The repository also contains the FVCodex installer for the installed Codex desktop app and its VS Code extension. It is separate from the existing `newllm` endpoint installer and uses the shared OAIC configuration file:
+
+```text
+%APPDATA%\oaic-usage\config.json
+```
+
+The desktop source is always detected from the currently installed Codex MSIX. The original MSIX package is not removed.
+
+### Install FVCodex (recommended portable mode)
+
+Run from this directory in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1
+```
+
+This creates a patched copy under `%LOCALAPPDATA%\FVCodex\portable`, patches the installed VS Code Codex extension with a backup, and creates the shortcut **FVCodex**. The portable copy is rebuilt from the current installed MSIX version, so running the installer again after a Codex update refreshes it.
+
+Useful options:
+
+```powershell
+# Do not launch the portable app after installation
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -NoLaunch
+
+# Configure the shared OAIC endpoint/key explicitly
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -BaseUrl https://codex.finnvnoi.top -ApiKey YOUR_KEY
+
+# Skip VS Code patching
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -NoVSCode
+
+# Optional advanced mode: patch the installed MSIX directly (Administrator required)
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -Mode direct
+```
+
+Direct mode stores the original `app.asar` and executable under `%APPDATA%\FVCodex\backups`. It does not delete the MSIX, manifest, profile, login data, or update registration. A later Windows app update can replace the patched files; run the installer again to patch the new version.
+
+### Uninstall FVCodex
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1
+```
+
+Uninstall removes the portable copy and **FVCodex** shortcut, restores the direct MSIX backup when direct mode was used, and restores the VS Code extension from its `.codex-unblock.bak` files. It keeps `%APPDATA%\oaic-usage\config.json` by default so the existing `newllm` configuration continues to work. To delete that shared OAIC configuration too:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1 -DeleteConfig
+```
+
+The uninstaller never removes the original MSIX package. Close Codex and VS Code before install/uninstall when possible.
+
+### Configure FVCodex / newllm
+
+`fvcodex_config.bat` configures the **account/native-catalog** flow. It is not the `custom-endpoint` flow: it does not write `model_catalog_json`, keeps `requires_openai_auth = true`, and updates the shared FVCodex/newllm configuration:
+
+```bat
+fvcodex_config.bat
+```
+
+The script can prompt for the base URL, API key, model, and reasoning effort. It updates `%USERPROFILE%\.codex\config.toml`, user environment variables, `%APPDATA%\oaic-usage\config.json`, and the VS Code Codex extension for account mode:
+
+```powershell
+# Fully specified, no prompts
+powershell -ExecutionPolicy Bypass -File .\fvcodex_config.ps1 `
+  -BaseUrl https://codex.finnvnoi.top `
+  -ApiKey YOUR_KEY `
+  -Model gpt-5.6-sol `
+  -Effort xhigh
+```
+
+Close and reopen FVCodex after changing the configuration. The API key is not printed by the configuration script.
+
+### OAIC usage with newer accounts
+
+Some newer account/menu versions no longer render the native `Usage remaining` menu item. The OAIC addon now uses that item when available and falls back to the account menu's `Help`/last menu entry as an injection anchor. OAIC usage is independent of the native Usage remaining feature; it calls the configured `/v1/usage` endpoint through the desktop main process.
+
+After updating the addon, reinstall portable FVCodex so the new preload is embedded:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -NoLaunch
+```
+
+Then fully close any old FVCodex processes and reopen it. If the account menu is already open, close and reopen the profile menu. Verify the addon/config with:
+
+```powershell
+node .\fvcodex-patch.js --doctor
+Get-Content "$env:APPDATA\oaic-usage\config.json"
+```
+
+
+## Existing newllm endpoint installer
+
 Cross-platform installers for configuring a FinnVnoi Codex endpoint in one of two modes:
 
 - `custom-endpoint`: the current behavior, with no ChatGPT/Codex login requirement and the bundled local model catalog.
-- `account`: the same endpoint, API key, model, and reasoning prompts, uses the native model catalog, and does not require a login check during installation.
+- `account`: the same endpoint, API key, model, and reasoning prompts, uses the native model catalog, and does not require a login check during installation. During an interactive Windows install, it additionally asks whether to install **FVCodex**: a portable Codex desktop build with stronger OpenAI-compatible support that leaves the original Codex app untouched. Choosing No preserves the existing account-mode flow.
 
 - Windows: `codex_install.ps1` / `codex_uninstall.ps1`
 - Linux and macOS, including Bash, Zsh, and Fish: `codex_install.sh` / `codex_uninstall.sh`
@@ -19,7 +112,9 @@ The default values match the repository owner's setup:
 | Provider | `codex` |
 | API key variable | `CODEX_API_KEY` |
 
-The API key is never embedded in the scripts or catalog. Pressing Enter at the API key prompt keeps the existing `CODEX_API_KEY`; if it is not already set, an API key must be entered.
+The portable build is copied from the installed official Codex MSIX. If it is missing and FVCodex is selected, Windows installs can offer to install the official **ChatGPT/Codex desktop app** automatically through `winget` using the Microsoft Store package `9PLM9XGG6VKS`; if that does not complete, the Microsoft Store page is opened for manual completion. The installer waits for confirmation and verifies the MSIX before continuing. Non-interactive mode does not launch a store UI and instead reports that the MSIX must be installed first.
+
+In `custom-endpoint` mode, after all values are entered the installer always checks for running `ChatGPT`/`Codex` processes. If any are found, it warns that they will be closed, waits for a key press, and terminates them before writing the Codex configuration. `custom-endpoint` never patches the VS Code extension.
 
 Windows saves the variables in the persistent User environment. Linux and macOS automatically load them in every new terminal through the selected shell profile. A running installer process cannot modify the environment of the parent shell that launched it, so the optional `source` command is only needed once for the terminal that was already open during installation.
 
@@ -47,13 +142,15 @@ Run PowerShell in the repository directory:
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1
 ```
 
-The installer first asks for a mode, then prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt. In `custom-endpoint`, an unknown model also gets a display-name prompt and is added to the installed catalog. In `account`, the installer does not check login; it leaves model discovery to native Codex while routing requests to the configured endpoint.
+The installer first asks for a mode, then prompts for endpoint, API key, model, and reasoning effort. Press Enter to use the defaults shown in the prompt. In `custom-endpoint`, an unknown model also gets a display-name prompt and is added to the installed catalog. In interactive Windows `account` mode, the installer additionally asks whether to install FVCodex portable. If Yes, it closes Codex only after confirmation, copies and patches a separate portable build, and creates the **FVCodex** Desktop shortcut; the original Codex MSIX remains untouched. If No, the existing account-mode flow is unchanged.
 
 Select a mode explicitly when scripting:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode custom-endpoint
 powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode account
+# Account mode plus FVCodex portable, without the interactive Yes/No prompt
+powershell -ExecutionPolicy Bypass -File .\codex_install.ps1 -Mode account -FVCodex
 ```
 
 Use `-Doctor` to check the active mode, config, and environment:
