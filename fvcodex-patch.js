@@ -26,27 +26,38 @@ const KEEP_CONFIG = has('keep-config');
 const DELETE_CONFIG = has('delete-config');
 const CONFIG_ONLY = has('config');
 const ACCOUNT_CONFIG = has('account');
+const CONFIG_MODE = String(arg('config-mode', ACCOUNT_CONFIG ? 'account' : 'custom-endpoint')).toLowerCase();
+const PROFILE_MODE = String(arg('profile', has('isolated') ? 'isolated' : 'shared')).toLowerCase();
+const ISOLATED_PROFILE = PROFILE_MODE === 'isolated';
 const NO_VSCODE = has('no-vscode');
 const NO_LAUNCH = has('no-launch');
 const VSCODE_PATCH_ONLY = has('vscode-patch');
 const VSCODE_RESTORE_ONLY = has('vscode-restore');
 const PORTABLE_REMOVE_ONLY = has('portable-remove');
 const DIRECT_RESTORE_ONLY = has('direct-restore');
+const BACKUP_UNINSTALL = has('backup');
 const BASE_ARG = String(arg('base-url', '') || '').trim();
 const SHOP = String(arg('shop', 'https://finnvnoi.top/shop/quota.php'));
 const API_KEY = String(arg('api-key', '') || '').trim();
 const MODEL_ARG = String(arg('model', '') || '').trim();
 const EFFORT_ARG = String(arg('effort', '') || '').trim();
 const SHORTCUT_NAME = String(arg('shortcut', 'FVCodex'));
+const SELECTION_ARG = String(arg('selection', '') || '').trim();
+const CATALOG_NAME = 'legacy_direct_model_catalog.json';
 
 const APP_DATA = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
 const LOCAL_APP_DATA = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
 const FV_HOME = path.join(LOCAL_APP_DATA, 'FVCodex');
+const PROFILE_HOME = path.join(FV_HOME, 'profile');
+const ISOLATED_CODEX_HOME = path.join(PROFILE_HOME, 'codex-home');
+const ISOLATED_USER_DATA = path.join(PROFILE_HOME, 'user-data');
 const STATE_DIR = path.join(APP_DATA, 'FVCodex');
 const INSTALL_STATE = path.join(STATE_DIR, 'install-state.json');
 const DIRECT_STATE = path.join(STATE_DIR, 'direct-state.json');
 const BACKUP_DIR = path.join(STATE_DIR, 'backups');
-const OAIC_CONFIG = path.join(APP_DATA, 'oaic-usage', 'config.json');
+const OAIC_CONFIG = ISOLATED_PROFILE
+  ? path.join(PROFILE_HOME, 'oaic-usage', 'config.json')
+  : path.join(APP_DATA, 'oaic-usage', 'config.json');
 const EXE_NAME = 'ChatGPT.exe';
 
 function log(s) { console.log(s); }
@@ -400,6 +411,31 @@ function codexAumid() {
 }
 
 function createPortableShortcut(exePath) {
+  if (ISOLATED_PROFILE) {
+    const launcher = path.join(PROFILE_HOME, 'launch-fvcodex.ps1');
+    fs.mkdirSync(PROFILE_HOME, { recursive: true });
+    function psQuote(value) {
+      return "'" + String(value).replace(/'/g, "''") + "'";
+    }
+    const ps = [
+      "$ErrorActionPreference = 'Stop'",
+      '$env:CODEX_HOME = ' + psQuote(ISOLATED_CODEX_HOME),
+      '$env:FVCODEX_OAIC_CONFIG = ' + psQuote(OAIC_CONFIG),
+      '$env:FVCODEX_USER_DATA = ' + psQuote(ISOLATED_USER_DATA),
+      '$env:CODEX_BASE_URL = ' + psQuote(resolveBase()),
+      '$env:CODEX_MODEL = ' + psQuote(resolveModel()),
+      '$env:CODEX_REASONING_EFFORT = ' + psQuote(resolveEffort()),
+      '$cfg = Get-Content -LiteralPath ' + psQuote(OAIC_CONFIG) + ' -Raw | ConvertFrom-Json',
+      '$env:CODEX_API_KEY = [string]$cfg.apiKey',
+      'Start-Process -FilePath ' + psQuote(exePath) + ' -ArgumentList ' + psQuote('--user-data-dir=' + ISOLATED_USER_DATA) + ' -WorkingDirectory ' + psQuote(path.dirname(exePath))
+    ].join('\r\n') + '\r\n';
+    fs.writeFileSync(launcher, ps, 'utf8');
+    shortcutPaths().forEach(function (lnk) {
+      if (fs.existsSync(lnk)) { try { fs.unlinkSync(lnk); } catch (e) { /* ignore */ } }
+      makeShortcut(lnk, process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + launcher + '"', PROFILE_HOME, exePath);
+    });
+    return;
+  }
   shortcutPaths().forEach(function (lnk) {
     if (fs.existsSync(lnk)) { try { fs.unlinkSync(lnk); } catch (e) { /* ignore */ } }
     makeShortcut(lnk, exePath, '', path.dirname(exePath), exePath);
@@ -432,7 +468,7 @@ function resolveBase() {
   try { configured = JSON.parse(fs.readFileSync(OAIC_CONFIG, 'utf8')) || {}; } catch (e) { configured = {}; }
   let base = String(BASE_ARG || process.env.CODEX_BASE_URL || process.env.OAIC_USAGE_BASE_URL || configured.baseUrl || '').trim();
   if (!base) {
-    const t = tomlString(readText(path.join(os.homedir(), '.codex', 'config.toml')), 'base_url');
+    const t = tomlString(readText(path.join(codexHome(), 'config.toml')), 'base_url');
     if (t) { try { base = new URL(t).origin; } catch (e) { base = t; } }
   }
   if (!base) base = 'https://codex.finnvnoi.top';
@@ -450,7 +486,7 @@ function resolveKey() {
 }
 
 function writeConfig() {
-  const dir = path.join(appData(), 'oaic-usage');
+  const dir = path.dirname(OAIC_CONFIG);
   fs.mkdirSync(dir, { recursive: true });
   let prev = {};
   try { prev = JSON.parse(fs.readFileSync(OAIC_CONFIG, 'utf8')) || {}; } catch (e) { prev = {}; }
@@ -465,8 +501,10 @@ function writeConfig() {
 
 /* ---------------- Codex TOML config ---------------- */
 function codexHome() {
+  if (ISOLATED_PROFILE) return ISOLATED_CODEX_HOME;
   const env = String(process.env.CODEX_HOME || '').trim();
-  return env ? path.resolve(env) : path.join(os.homedir(), '.codex');
+  if (env) return path.resolve(env);
+  return path.join(os.homedir(), '.codex');
 }
 
 function tomlStr(s) {
@@ -534,6 +572,7 @@ function resolveEffort() {
 }
 
 function setUserEnv(name, value) {
+  if (ISOLATED_PROFILE) { info('isolated: khong ghi User env ' + name); return; }
   if (process.env.FVCODEX_SKIP_ENV === '1') { info('skip env ' + name + ' (test)'); return; }
   const r = runPS("[Environment]::SetEnvironmentVariable('" + psEscape(name) + "', '" + psEscape(value) + "', 'User')");
   if (r.code !== 0) warn('khong dat duoc ' + name + ': ' + (r.err || r.out));
@@ -541,7 +580,7 @@ function setUserEnv(name, value) {
 }
 
 function configure() {
-  log(ACCOUNT_CONFIG ? '=== FVCodex account config ===' : '=== FVCodex config ===');
+  log(CONFIG_MODE === 'account' ? '=== FVCodex account config ===' : '=== FVCodex config ===');
   const home = codexHome();
   fs.mkdirSync(home, { recursive: true });
   const cfgPath = path.join(home, 'config.toml');
@@ -556,18 +595,27 @@ function configure() {
     ['model', tomlStr(model)],
     ['model_provider', tomlStr('codex')],
     ['model_reasoning_effort', tomlStr(effort)],
-    ['model_catalog_json', null]
+    ['model_catalog_json', CONFIG_MODE === 'custom-endpoint' ? tomlStr(path.join(home, CATALOG_NAME)) : null]
   ]);
-  text = tomlReplaceTable(text, 'model_providers.codex', [
+  const providerLines = [
     'name = "openai"',
     'base_url = ' + tomlStr(endpoint),
     'env_key = "CODEX_API_KEY"',
     'wire_api = "responses"',
-    'supports_standalone_web_search = true',
-    'supports_websockets = false',
-    'requires_openai_auth = true'
-  ]);
+    'supports_standalone_web_search = true'
+  ];
+  if (CONFIG_MODE === 'account') {
+    providerLines.push('supports_websockets = false', 'requires_openai_auth = true');
+  }
+  text = tomlReplaceTable(text, 'model_providers.codex', providerLines);
   fs.writeFileSync(cfgPath, text);
+  if (CONFIG_MODE === 'custom-endpoint') {
+    const bundled = path.join(ROOT, CATALOG_NAME);
+    const catalogPath = path.join(home, CATALOG_NAME);
+    if (!fs.existsSync(bundled)) throw new Error('thieu catalog: ' + bundled);
+    fs.copyFileSync(bundled, catalogPath);
+    ok('catalog: ' + catalogPath);
+  }
   ok('config.toml: ' + cfgPath);
   ok('endpoint: ' + endpoint);
   ok('model: ' + model + ' (effort ' + effort + ')');
@@ -579,12 +627,12 @@ function configure() {
   else warn('chua co API key. Chay lai voi -ApiKey hoac dat bien CODEX_API_KEY.');
 
   writeConfig();
-  if (ACCOUNT_CONFIG) {
+  if (CONFIG_MODE === 'account' && !NO_VSCODE) {
     const vs = patchVsCode();
     if (vs) log('VS Code files patched: ' + vs);
   }
   log('');
-  log(ACCOUNT_CONFIG
+  log(CONFIG_MODE === 'account'
     ? 'XONG. Account/native-catalog config da duoc ap dung. Khoi dong lai Codex/FVCodex va VS Code de ap dung.'
     : 'XONG. Khoi dong lai FVCodex (va terminal moi) de ap dung cau hinh.');
   return 0;
@@ -819,11 +867,84 @@ function restoreDirectOnly() {
 
 function removePortableOnly() {
   log('=== FVCodex portable uninstall ===');
-  killProcessAt(FV_HOME);
+  killProcessAt(path.join(FV_HOME, 'portable'));
   removeShortcuts();
-  rmrf(FV_HOME, 20);
-  ok('da go portable FVCodex va shortcut');
+  rmrf(path.join(FV_HOME, 'portable'), 20);
+  if (fs.existsSync(INSTALL_STATE)) {
+    const st = readInstallState();
+    if (st && st.portableExe) { delete st.portableExe; st.portableRemovedAt = new Date().toISOString(); writeJsonFile(INSTALL_STATE, st); }
+  }
+  ok('da go portable FVCodex va shortcut (giu profile neu co)');
   return 0;
+}
+
+function uninstallBackupRoot() {
+  return path.join(STATE_DIR, 'uninstall-backups', new Date().toISOString().replace(/[:.]/g, '-'));
+}
+
+function backupUninstallItem(root, source, relativeName) {
+  if (!source || !fs.existsSync(source)) return '';
+  const destination = path.join(root, relativeName);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const stat = fs.statSync(source);
+  if (stat.isDirectory()) {
+    fs.cpSync(source, destination, { recursive: true, force: true });
+  } else {
+    fs.copyFileSync(source, destination);
+  }
+  return destination;
+}
+
+function askBackupBeforeUninstall() {
+  if (BACKUP_UNINSTALL) return true;
+  if (SELECTION_ARG) return false;
+  const r = cp.spawnSync('powershell', ['-NoProfile', '-Command', "Read-Host 'Backup selected files before uninstall? [y/N]'"], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' });
+  return /^(y|yes|1)$/i.test(String(r.stdout || '').trim());
+}
+
+function removeProfileOnly() {
+  log('=== FVCodex isolated profile uninstall ===');
+  killProcessAt(path.join(FV_HOME, 'profile'));
+  rmrf(PROFILE_HOME, 20);
+  ok('da xoa profile/history/config FVCodex');
+  return 0;
+}
+
+function vscodeBackupCount() {
+  let n = 0;
+  vscodeExtDirs().forEach(function (assets) {
+    try { n += fs.readdirSync(assets).filter(function (f) { return f.slice(-VS_BAK_SUFFIX.length) === VS_BAK_SUFFIX; }).length; } catch (e) { /* ignore */ }
+  });
+  return n;
+}
+
+function uninstallSelection() {
+  const st = readInstallState();
+  const items = [];
+  if (fs.existsSync(path.join(FV_HOME, 'portable'))) items.push({ n: 1, label: 'FVCodex portable + shortcut' });
+  if ((st && st.profile === 'isolated' && fs.existsSync(PROFILE_HOME)) || fs.existsSync(ISOLATED_CODEX_HOME)) items.push({ n: 2, label: 'FVCodex isolated profile/history/config' });
+  if (readDirectState()) items.push({ n: 3, label: 'direct MSIX patch (restore original)' });
+  const vs = vscodeBackupCount();
+  if (vs) items.push({ n: 4, label: 'VS Code patch (' + vs + ' backup file(s))' });
+  const sharedOaic = path.join(APP_DATA, 'oaic-usage', 'config.json');
+  const isolatedOaic = path.join(PROFILE_HOME, 'oaic-usage', 'config.json');
+  if (fs.existsSync(sharedOaic)) items.push({ n: 5, label: 'shared OAIC config (' + sharedOaic + ')' });
+  if (fs.existsSync(isolatedOaic)) items.push({ n: 6, label: 'isolated OAIC config (' + isolatedOaic + ')' });
+  if (!items.length) { info('khong tim thay thanh phan FVCodex/newllm de go.'); return new Set(); }
+  log('');
+  log('Phat hien cac thanh phan da cai/patch:');
+  items.forEach(function (x) { log('  ' + x.n + '. ' + x.label); });
+  log('Nhap so cach nhau boi dau phay, hoac all de chon tat ca. Enter = huy.');
+  let answer = SELECTION_ARG.toLowerCase();
+  if (!answer) {
+    const r = cp.spawnSync('powershell', ['-NoProfile', '-Command', "Read-Host 'Chon'"], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' });
+    answer = String(r.stdout || '').trim().toLowerCase();
+  }
+  if (!answer) return new Set();
+  if (answer === 'all' || answer === 'a') return new Set(items.map(function (x) { return x.n; }));
+  const selected = new Set();
+  answer.split(',').forEach(function (v) { const n = parseInt(v.trim(), 10); if (items.some(function (x) { return x.n === n; })) selected.add(n); });
+  return selected;
 }
 
 /* ---------------- Launch ---------------- */
@@ -837,7 +958,20 @@ function launch() {
   }
   if (state.mode === 'portable' && state.portableExe && fs.existsSync(state.portableExe)) {
     info('khoi dong ' + state.portableExe);
-    const child = cp.spawn(state.portableExe, [], { detached: true, stdio: 'ignore', cwd: path.dirname(state.portableExe) });
+    const env = Object.assign({}, process.env);
+    if (state.profile === 'isolated') {
+      env.CODEX_HOME = state.codexHome || ISOLATED_CODEX_HOME;
+      env.FVCODEX_OAIC_CONFIG = state.oaicConfig || OAIC_CONFIG;
+      env.FVCODEX_USER_DATA = state.userData || ISOLATED_USER_DATA;
+      env.CODEX_BASE_URL = state.baseUrl || env.CODEX_BASE_URL || '';
+      env.CODEX_API_KEY = resolveKey() || env.CODEX_API_KEY || '';
+      env.CODEX_MODEL = state.model || env.CODEX_MODEL || '';
+      env.CODEX_REASONING_EFFORT = state.effort || env.CODEX_REASONING_EFFORT || '';
+    }
+    const launchArgs = state.profile === 'isolated' && state.userData
+      ? ['--user-data-dir=' + state.userData]
+      : [];
+    const child = cp.spawn(state.portableExe, launchArgs, { detached: true, stdio: 'ignore', cwd: path.dirname(state.portableExe), env: env });
     child.unref();
     return;
   }
@@ -885,7 +1019,21 @@ function install() {
   let vs = 0;
   if (!NO_VSCODE) vs = patchVsCode();
 
-  saveInstallState({ mode: MODE, msixDir: msixDir, portableExe: portableExe, vsCodeFiles: vs });
+  saveInstallState({
+    mode: MODE,
+    profile: ISOLATED_PROFILE ? 'isolated' : 'shared',
+    configMode: CONFIG_MODE,
+    msixDir: msixDir,
+    portableExe: portableExe,
+    vsCodeFiles: vs,
+    codexHome: ISOLATED_PROFILE ? ISOLATED_CODEX_HOME : codexHome(),
+    userData: ISOLATED_PROFILE ? ISOLATED_USER_DATA : '',
+    oaicConfig: OAIC_CONFIG,
+    baseUrl: resolveBase(),
+    model: resolveModel(),
+    effort: resolveEffort(),
+    apiKeyConfigured: !!resolveKey()
+  });
 
   log('');
   log('XONG.');
@@ -910,38 +1058,55 @@ function restoreOnly() {
 function uninstall() {
   log('=== FVCodex uninstall ===');
   const state = readInstallState();
-  if (state && state.portableExe) killProcessAt(path.join(FV_HOME, 'portable'));
-  killProcessAt(FV_HOME);
-
-  const directOk = restoreDirect();
+  const selected = uninstallSelection();
+  if (!selected.size) { info('Khong co thay doi nao duoc thuc hien.'); return 0; }
+  const makeBackup = askBackupBeforeUninstall();
+  const backupRoot = makeBackup ? uninstallBackupRoot() : '';
+  if (makeBackup) fs.mkdirSync(backupRoot, { recursive: true });
+  if (selected.has(1)) {
+    if (makeBackup) backupUninstallItem(backupRoot, path.join(FV_HOME, 'portable'), 'portable');
+    killProcessAt(path.join(FV_HOME, 'portable')); removeShortcuts(); rmrf(path.join(FV_HOME, 'portable'), 20); ok('da go portable FVCodex');
+  }
+  if (selected.has(3)) {
+    const direct = readDirectState();
+    if (makeBackup && direct) {
+      backupUninstallItem(backupRoot, direct.asarPath, path.join('direct', 'app.asar.current'));
+      backupUninstallItem(backupRoot, direct.exePath, path.join('direct', direct.exeName || EXE_NAME));
+    }
+    restoreDirect();
+  }
   let vs = 0;
-  if (!NO_VSCODE) vs = restoreVsCode();
-  removeShortcuts();
-
-  if (fs.existsSync(FV_HOME)) {
-    try { fs.rmSync(FV_HOME, { recursive: true, force: true }); ok('xoa ' + FV_HOME); }
-    catch (e) { warn('khong xoa duoc ' + FV_HOME + ': ' + (e && e.message || e)); }
+  if (selected.has(4) && !NO_VSCODE) {
+    if (makeBackup) {
+      vscodeExtDirs().forEach(function (assets) {
+        try { fs.readdirSync(assets).filter(function (f) { return f.slice(-VS_BAK_SUFFIX.length) === VS_BAK_SUFFIX; }).forEach(function (f) { backupUninstallItem(backupRoot, path.join(assets, f), path.join('vscode', path.basename(path.dirname(path.dirname(assets))), f)); }); } catch (e) { /* ignore */ }
+      });
+    }
+    vs = restoreVsCode();
   }
-
-  if (DELETE_CONFIG && !KEEP_CONFIG) {
-    if (fs.existsSync(OAIC_CONFIG)) { try { fs.unlinkSync(OAIC_CONFIG); ok('xoa config OAIC: ' + OAIC_CONFIG); } catch (e) { warn('khong xoa duoc config OAIC'); } }
-  } else {
-    info('giu config OAIC: ' + OAIC_CONFIG);
+  if (selected.has(2)) { if (makeBackup) backupUninstallItem(backupRoot, PROFILE_HOME, 'profile'); killProcessAt(path.join(FV_HOME, 'profile')); rmrf(PROFILE_HOME, 20); ok('da xoa profile FVCodex tach rieng'); }
+  if (selected.has(5)) {
+    const sharedConfig = path.join(APP_DATA, 'oaic-usage', 'config.json');
+    if (makeBackup) backupUninstallItem(backupRoot, sharedConfig, path.join('oaic', 'shared-config.json'));
+    if (fs.existsSync(sharedConfig)) { try { fs.unlinkSync(sharedConfig); ok('xoa config OAIC shared'); } catch (e) { warn('khong xoa duoc config OAIC shared'); } }
   }
-
-  if (fs.existsSync(INSTALL_STATE)) { try { fs.unlinkSync(INSTALL_STATE); } catch (e) { /* ignore */ } }
-  if (fs.existsSync(STATE_DIR)) {
-    let rest = [];
-    try { rest = fs.readdirSync(STATE_DIR); } catch (e) { rest = []; }
-    if (rest.length === 0) { try { fs.rmdirSync(STATE_DIR); } catch (e) { /* ignore */ } }
+  if (selected.has(6)) {
+    const isolatedConfig = path.join(PROFILE_HOME, 'oaic-usage', 'config.json');
+    if (makeBackup) backupUninstallItem(backupRoot, isolatedConfig, path.join('oaic', 'isolated-config.json'));
+    if (fs.existsSync(isolatedConfig)) { try { fs.unlinkSync(isolatedConfig); ok('xoa config OAIC isolated'); } catch (e) { warn('khong xoa duoc config OAIC isolated'); } }
+  }
+  if (selected.has(1) && fs.existsSync(INSTALL_STATE)) {
+    const next = readInstallState();
+    if (next) { delete next.portableExe; next.portableRemovedAt = new Date().toISOString(); writeJsonFile(INSTALL_STATE, next); }
   }
 
   log('');
   log('XONG.');
+  if (makeBackup) log('- Backup: ' + backupRoot);
   if (vs) log('- VS Code: da restore ' + vs + ' file. Reload Window de ap dung.');
   if (state && state.mode === 'direct') log('- Desktop: da khoi phuc MSIX goc.');
-  log('- Shortcut ' + SHORTCUT_NAME + ' da duoc xoa.');
-  return directOk ? 0 : 1;
+  if (selected.has(1)) log('- Shortcut ' + SHORTCUT_NAME + ' da duoc xoa.');
+  return 0;
 }
 
 function doctor() {
@@ -954,6 +1119,8 @@ function doctor() {
   const key = resolveKey();
   log('apiKey: ' + (key ? 'da co (' + key.length + ' ky tu)' : 'chua co'));
   log('oaic config: ' + OAIC_CONFIG + (fs.existsSync(OAIC_CONFIG) ? ' (co)' : ' (chua co)'));
+  log('profile: ' + (ISOLATED_PROFILE ? 'isolated' : 'shared'));
+  log('codex home: ' + codexHome());
   const portableExe = findAppExe(path.join(FV_HOME, 'portable', 'app'));
   log('portable: ' + (portableExe || 'chua cai'));
   log('direct state: ' + (fs.existsSync(DIRECT_STATE) ? 'co' : 'khong'));
@@ -980,6 +1147,7 @@ function main() {
   if (VSCODE_PATCH_ONLY) return patchVsCodeOnly();
   if (VSCODE_RESTORE_ONLY) return restoreVsCodeOnly();
   if (PORTABLE_REMOVE_ONLY) return removePortableOnly();
+  if (has('profile-remove')) return removeProfileOnly();
   if (DIRECT_RESTORE_ONLY) return restoreDirectOnly();
   return install();
 }

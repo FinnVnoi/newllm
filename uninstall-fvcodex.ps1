@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$DeleteConfig,
-    [switch]$NoVSCode
+    [switch]$NoVSCode,
+    [string]$Selection = '',
+    [switch]$Backup
 )
 
 Set-StrictMode -Version Latest
@@ -23,6 +25,8 @@ if ((Test-Path -LiteralPath $directState) -and -not (Test-Admin)) {
     $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
     if ($DeleteConfig) { $argLine += ' -DeleteConfig' }
     if ($NoVSCode) { $argLine += ' -NoVSCode' }
+    if ($Selection) { $argLine += ' -Selection "{0}"' -f $Selection }
+    if ($Backup) { $argLine += ' -Backup' }
     $proc = Start-Process powershell.exe -Verb RunAs -ArgumentList $argLine -Wait -PassThru
     exit $proc.ExitCode
 }
@@ -31,6 +35,8 @@ $script = Join-Path $root 'fvcodex-patch.js'
 $common = @("--root=$root", '--uninstall')
 if ($DeleteConfig) { $common += '--delete-config' }
 if ($NoVSCode) { $common += '--no-vscode' }
+if ($Selection) { $common += "--selection=$Selection" }
+if ($Backup) { $common += '--backup' }
 
 & node $script @common
 exit $LASTEXITCODE

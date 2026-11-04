@@ -3,6 +3,9 @@
   try {
     const electron = require('electron');
     const { ipcMain, shell, app } = electron;
+    if (process.env.FVCODEX_USER_DATA && app && app.setPath) {
+      try { app.setPath('userData', process.env.FVCODEX_USER_DATA); } catch (e) { console.error('[oaic-usage] userData path', e && e.message || e); }
+    }
     const https = require('https');
     const http = require('http');
     const fs = require('fs');
@@ -18,6 +21,7 @@
 
     function configPaths() {
       const out = [];
+      if (process.env.FVCODEX_OAIC_CONFIG) out.push(process.env.FVCODEX_OAIC_CONFIG);
       const appData = process.env.APPDATA || (app && app.getPath ? app.getPath('appData') : '');
       if (appData) out.push(path.join(appData, 'oaic-usage', 'config.json'));
       out.push(path.join(os.homedir(), '.oaic-usage.json'));
@@ -33,7 +37,9 @@
     }
 
     function readCodexConfig() {
-      const p = path.join(os.homedir(), '.codex', 'config.toml');
+      const configuredHome = String(process.env.CODEX_HOME || '').trim();
+      const home = configuredHome || path.join(os.homedir(), '.codex');
+      const p = path.join(home, 'config.toml');
       try { return fs.readFileSync(p, 'utf8'); } catch (e) { return ''; }
     }
 

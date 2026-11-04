@@ -1,5 +1,85 @@
 # Codex custom endpoint installer
 
+Configure Codex or install FVCodex with a custom endpoint. For most users, use the simple Windows commands below; the original Codex app is not removed.
+
+## Quick start
+
+### Windows
+
+Run the installer from the repository folder:
+
+```bat
+install-fvcodex.bat
+```
+
+To configure the terminal/desktop Codex endpoint directly:
+
+```bat
+codex_install.bat
+```
+
+To remove selected components later:
+
+```bat
+uninstall-fvcodex.bat
+```
+
+For the terminal/Codex configuration instead, run:
+
+```bat
+codex_uninstall.bat
+```
+
+The uninstaller scans first, shows what it found, and lets you select components. Backup is **off by default**; answer Yes when prompted, or use `-Backup`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1 -Backup
+```
+
+The backup option creates an additional safety copy before deleting/restoring selected files. It does not disable the original backups required to restore a direct MSIX patch or the original Codex configuration.
+
+For the terminal/Codex installer directly, use the equivalent PowerShell switch:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\codex_uninstall.ps1 -Backup
+```
+
+### Linux/macOS
+
+```bash
+./codex_install.sh
+./codex_uninstall.sh
+```
+
+Use `./codex_uninstall.sh --backup` to save changed files before restoring the original state. Without that flag, no extra safety copy is created.
+
+## What this project does
+
+- `custom-endpoint`: use the bundled local model catalog and a custom endpoint.
+- `account`: use the native Codex catalog, keep `requires_openai_auth = true`, and configure a custom endpoint shape.
+- FVCodex portable: a separate patched desktop copy with optional shared or isolated history/configuration.
+
+The original Codex MSIX/package remains installed. Read the detailed sections below only when you need advanced options, VS Code patching, direct MSIX mode, or CI/CD packaging.
+
+## CI/CD and releases
+
+The repository includes GitHub Actions for:
+
+- syntax checks for PowerShell and JavaScript on Windows;
+- Bash syntax checks on Ubuntu;
+- automatic source ZIP packaging and GitHub Release creation when a `v*` tag is pushed.
+
+Create a release with:
+
+```bash
+git add .
+git commit -m "Prepare release"
+git tag v1.0.0
+git push origin main --tags
+```
+
+The first release format is intentionally a ZIP because the installers still need the official Codex MSIX, Node.js, and Windows permissions at runtime. A self-contained `codex_install.exe` can be added later as a thin bootstrapper that checks/installs Node.js, downloads or extracts the repository payload, and launches the PowerShell installer. It should not embed API keys or silently modify the original Codex profile.
+
 ## FVCodex desktop and VS Code integration
 
 The repository also contains the FVCodex installer for the installed Codex desktop app and its VS Code extension. It is separate from the existing `newllm` endpoint installer and uses the shared OAIC configuration file:
@@ -18,7 +98,14 @@ Run from this directory in PowerShell:
 powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1
 ```
 
-This creates a patched copy under `%LOCALAPPDATA%\FVCodex\portable`, patches the installed VS Code Codex extension with a backup, and creates the shortcut **FVCodex**. The portable copy is rebuilt from the current installed MSIX version, so running the installer again after a Codex update refreshes it.
+This creates a patched copy under `%LOCALAPPDATA%\FVCodex\portable` and creates the shortcut **FVCodex**. The installer asks whether VS Code should be patched; choosing No leaves VS Code untouched. The portable copy is rebuilt from the current installed MSIX version, so running the installer again after a Codex update refreshes it.
+
+For account mode, the installer also asks whether FVCodex should share or isolate its profile:
+
+- `shared`: uses the normal Codex configuration/history locations and the shared OAIC file.
+- `isolated`: uses `%LOCALAPPDATA%\FVCodex\profile\codex-home`, `user-data`, and `oaic-usage\config.json`. It uses the custom endpoint while retaining `requires_openai_auth = true`, and does not change the original Codex profile.
+
+The interactive setup asks for endpoint, API key, model, and reasoning effort. The original Codex MSIX is not removed.
 
 Useful options:
 
@@ -29,8 +116,14 @@ powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -NoLaunch
 # Configure the shared OAIC endpoint/key explicitly
 powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -BaseUrl https://codex.finnvnoi.top -ApiKey YOUR_KEY
 
+# Explicit custom-endpoint mode
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -ConfigMode custom-endpoint -Profile shared -NoLaunch
+
 # Skip VS Code patching
 powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -NoVSCode
+
+# Explicit isolated account profile
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -ConfigMode account -Profile isolated -NoLaunch
 
 # Optional advanced mode: patch the installed MSIX directly (Administrator required)
 powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -Mode direct
@@ -44,10 +137,12 @@ Direct mode stores the original `app.asar` and executable under `%APPDATA%\FVCod
 powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1
 ```
 
-Uninstall removes the portable copy and **FVCodex** shortcut, restores the direct MSIX backup when direct mode was used, and restores the VS Code extension from its `.codex-unblock.bak` files. It keeps `%APPDATA%\oaic-usage\config.json` by default so the existing `newllm` configuration continues to work. To delete that shared OAIC configuration too:
+Uninstall first scans the device for detected portable, isolated-profile, direct-MSIX, VS Code, OAIC, and Codex endpoint components. It then accepts comma-separated component numbers or `all`; only selected components are removed/restored. Unselected original Codex configuration is not touched. It restores the direct MSIX backup when direct mode was used and restores VS Code files from `.codex-unblock.bak` files.
+
+The shared OAIC file is shown as a selectable component. To preselect a component in the FVCodex wrapper, use its numeric selection (for example `5` for shared OAIC):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1 -DeleteConfig
+powershell -ExecutionPolicy Bypass -File .\uninstall-fvcodex.ps1 -Selection 5
 ```
 
 The uninstaller never removes the original MSIX package. Close Codex and VS Code before install/uninstall when possible.
@@ -295,7 +390,7 @@ It also persists:
 
 Windows stores them as User environment variables. Linux and macOS store them in `~/.codex/codex_custom_endpoint.env` with file mode `600`, then source that file from the selected shell profile.
 
-The first installation backs up the original config, target catalog, environment data, and related state. Re-running the installer keeps the original backup. Uninstall restores the original files and preserves a safety copy if an installed file was changed afterward.
+The first installation backs up the original config, target catalog, environment data, and related state. Re-running the installer keeps the original backup. Uninstall restores the original files; an additional safety copy is created only when `-Backup`, `--backup`, or the interactive Yes choice is used.
 
 After installing on Windows, close all running Codex applications and reopen them. After installing on Linux or macOS, restart your device. Restart Codex after uninstalling.
 

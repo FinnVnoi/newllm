@@ -22,6 +22,28 @@ $EnvironmentVariableNames = @(
     'CODEX_MODEL',
     'CODEX_REASONING_EFFORT'
 )
+$Language = 'en'
+
+function Ui([string]$English, [string]$Vietnamese) {
+    if ($Language -eq 'vi') { return $Vietnamese }
+    return $English
+}
+
+function Read-YesNo([string]$Prompt, [bool]$DefaultYes = $false) {
+    $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
+    $answer = Read-Host ($Prompt + ' ' + $suffix)
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $DefaultYes }
+    return $answer.Trim() -match '^(y|yes|1)$'
+}
+
+function Read-FVCodexProfile {
+    Write-Host ''
+    Write-Host (Ui 'FVCodex can share or isolate its history/configuration from the original Codex.' 'FVCodex co the dung chung hoac tach rieng lich su/cau hinh voi Codex goc.') -ForegroundColor Cyan
+    $answer = Read-Host (Ui 'Profile: 1=shared, 2=isolated [1]' 'Ho so: 1=dung chung, 2=tach rieng [1]')
+    if ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim() -eq '1') { return 'shared' }
+    if ($answer.Trim() -eq '2') { return 'isolated' }
+    throw (Ui 'Profile must be 1 (shared) or 2 (isolated).' 'Ho so phai la 1 (dung chung) hoac 2 (tach rieng).')
+}
 
 function Get-CodexHome {
     if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
@@ -620,21 +642,39 @@ if ($Doctor) {
     exit 1
 }
 
+if (-not $NonInteractive -and -not $Doctor) {
+    Write-Host 'Select language / Chon ngon ngu:' -ForegroundColor Cyan
+    Write-Host '  1. Tieng Viet'
+    Write-Host '  2. English'
+    $languageChoice = Read-Host 'Language [2]'
+    if ($languageChoice -eq '1') { $Language = 'vi' }
+    elseif ($languageChoice -notin @('', '2')) { throw 'Language must be 1 or 2.' }
+}
 $Mode = Read-InstallMode
 $InstallFVCodex = $false
+$FVCodexProfile = 'shared'
+$PatchFVCodexVSCode = $false
 if ($FVCodex -and $Mode -ne 'account') {
     throw '-FVCodex requires -Mode account. FVCodex is installed after account-mode configuration.'
 }
 if ($Mode -eq 'account' -and $FVCodex) {
     $InstallFVCodex = $true
+    if (-not $NonInteractive) {
+        $FVCodexProfile = Read-FVCodexProfile
+        $PatchFVCodexVSCode = Read-YesNo 'Patch the VS Code Codex extension too?'
+    }
 }
 elseif ($Mode -eq 'account' -and -not $NonInteractive) {
     Write-Host ''
     Write-Host 'FVCodex is a portable Codex desktop build with enhanced OpenAI-compatible endpoint support.'
     Write-Host 'It does not modify or replace the original Codex app.'
-    $fvcodexChoice = Read-Host 'Would you like to install and configure FVCodex as well? [y/N]'
-    $InstallFVCodex = $fvcodexChoice -match '^(y|yes)$'
+    $InstallFVCodex = Read-YesNo 'Would you like to install and configure FVCodex as well?'
+    if ($InstallFVCodex) {
+        $FVCodexProfile = Read-FVCodexProfile
+    }
+    $PatchFVCodexVSCode = Read-YesNo 'Patch the VS Code Codex extension too?'
 }
+if ($InstallFVCodex -and $NonInteractive) { $FVCodexProfile = 'shared' }
 if ($Mode -eq 'account') {
     $ProviderId = 'codex'
     $ProviderName = 'openai'
@@ -889,7 +929,8 @@ function Install-FVCodexPortable {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$Model,
-        [Parameter(Mandatory = $true)][string]$Effort
+        [Parameter(Mandatory = $true)][string]$Effort,
+        [Parameter(Mandatory = $true)][ValidateSet('shared','isolated')][string]$Profile
     )
 
     $fvcodexScript = Join-Path $scriptDirectory 'fvcodex-patch.js'
@@ -906,11 +947,20 @@ function Install-FVCodexPortable {
     $env:CODEX_MODEL = $Model
     $env:CODEX_REASONING_EFFORT = $Effort
 
+    if ($Profile -eq 'isolated') {
+        Write-Host 'Preparing the isolated FVCodex account-shaped profile...' -ForegroundColor Cyan
+        & node $fvcodexScript "--root=$scriptDirectory" '--config' '--account' '--no-vscode' "--profile=$Profile" '--config-mode=account'
+        if ($LASTEXITCODE -ne 0) {
+            throw "FVCodex isolated profile configuration failed with exit code $LASTEXITCODE."
+        }
+    }
+
     Write-Host ''
     Write-Host 'Installing FVCodex portable build...' -ForegroundColor Cyan
-    # --no-vscode: the account-mode VS Code patch was already applied above and
-    # must not be re-counted or duplicated by the FVCodex installer.
-    & node $fvcodexScript "--root=$scriptDirectory" '--mode=portable' '--no-launch' '--no-vscode'
+    # Apply the user's single VS Code choice to the FVCodex build as well.
+    $profileArg = "--profile=$Profile"
+    $vsArg = if ($PatchFVCodexVSCode) { @() } else { @('--no-vscode') }
+    & node $fvcodexScript "--root=$scriptDirectory" '--mode=portable' '--no-launch' $vsArg $profileArg '--config-mode=account' '--account'
     if ($LASTEXITCODE -ne 0) {
         throw "FVCodex installation failed with exit code $LASTEXITCODE."
     }
@@ -934,9 +984,7 @@ $state.installedConfigSha256 = Get-Sha256 -Path $configPath
 $state.installedCatalogSha256 = if (Test-Path -LiteralPath $targetCatalogPath -PathType Leaf) { Get-Sha256 -Path $targetCatalogPath } else { $null }
 Write-JsonAtomic -Path $statePath -Value $state
 
-# Account mode always patches the VS Code Codex extension, independent of the
-# FVCodex choice. custom-endpoint must never touch the VS Code extension.
-if ($Mode -eq 'account') {
+if ($Mode -eq 'account' -and $PatchFVCodexVSCode -and -not $InstallFVCodex) {
     $vsCodeScript = Join-Path $scriptDirectory 'fvcodex-patch.js'
     if (-not (Test-Path -LiteralPath $vsCodeScript -PathType Leaf)) {
         throw "VS Code patch script is missing: $vsCodeScript"
@@ -963,5 +1011,5 @@ Write-Host 'User environment variables: CODEX_BASE_URL, CODEX_API_KEY, CODEX_MOD
 Write-Host 'To apply these changes, close all running Codex applications and reopen them.'
 
 if ($InstallFVCodex) {
-    Install-FVCodexPortable -BaseUrl $endpoint -ApiKey $apiKey -Model $model -Effort $effort
+    Install-FVCodexPortable -BaseUrl $endpoint -ApiKey $apiKey -Model $model -Effort $effort -Profile $FVCodexProfile
 }

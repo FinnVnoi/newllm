@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$DeleteConfig
+    [switch]$DeleteConfig,
+    [string]$Selection = '',
+    [switch]$Backup
 )
 
 Set-StrictMode -Version Latest
@@ -91,6 +93,26 @@ function Save-ChangedFile {
     return $safetyPath
 }
 
+function Read-BackupChoice {
+    if ($Backup) { return $true }
+    if (-not [string]::IsNullOrWhiteSpace($Selection)) { return $false }
+    $answer = Read-Host 'Backup selected files before uninstall? [y/N]'
+    return $answer -match '^(y|yes|1)$'
+}
+
+function Save-UninstallCopy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $destination = Join-Path $Root $RelativePath
+    [void](New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force)
+    Copy-Item -LiteralPath $Path -Destination $destination -Recurse -Force
+    return $destination
+}
+
 function Test-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -136,6 +158,24 @@ function Repair-DanglingCodexProvider {
     return $true
 }
 
+function Read-SelectedUninstallParts {
+    param([Parameter(Mandatory = $true)][object[]]$Parts)
+    if (-not [string]::IsNullOrWhiteSpace($Selection)) {
+        $answer = $Selection.Trim().ToLowerInvariant()
+    }
+    else {
+        Write-Host ''
+        Write-Host 'Detected installed or patched components:' -ForegroundColor Cyan
+        foreach ($part in $Parts) { Write-Host ('  ' + $part.Id + '. ' + $part.Label) }
+        Write-Host 'Enter comma-separated numbers, ALL for everything, or Enter to cancel.'
+        $answer = (Read-Host 'Selection').Trim().ToLowerInvariant()
+    }
+    if ([string]::IsNullOrWhiteSpace($answer)) { return @() }
+    if ($answer -in @('all', 'a')) { return @($Parts) }
+    $wanted = @($answer -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    return @($Parts | Where-Object { $wanted -contains ([string]$_.Id) })
+}
+
 function Reset-CodexToNativeAccount {
     param(
         [Parameter(Mandatory = $true)][string]$Path
@@ -173,25 +213,56 @@ $hasDirectPatch = Test-Path -LiteralPath $directStatePath -PathType Leaf
 $vsCodeBackupFiles = @(
     Get-ChildItem -Path (Join-Path $env:USERPROFILE '.vscode\extensions'), (Join-Path $env:USERPROFILE '.vscode-insiders\extensions'), (Join-Path $env:USERPROFILE '.cursor\extensions'), (Join-Path $env:USERPROFILE '.windsurf\extensions') -Recurse -File -Filter '*.codex-unblock.bak' -ErrorAction SilentlyContinue
 )
-$hasPortableFVCodex = Test-Path -LiteralPath $fvcodexHome -PathType Container
+$hasPortableFVCodex = Test-Path -LiteralPath (Join-Path $fvcodexHome 'portable') -PathType Container
+$hasIsolatedFVCodex = Test-Path -LiteralPath (Join-Path $fvcodexHome 'profile') -PathType Container
 $hasVsCodePatch = $vsCodeBackupFiles.Count -gt 0
 $hasInstallState = Test-Path -LiteralPath $statePath -PathType Leaf
 
-Stop-CodexBeforeUninstall
+$oaicConfigPath = Join-Path $env:APPDATA 'oaic-usage\config.json'
+$detectedParts = @()
+if ($hasInstallState) { $detectedParts += [pscustomobject]@{ Id = 1; Label = 'Codex config/catalog/environment (restore original backup)' } }
+if (Test-Path -LiteralPath (Join-Path $fvcodexHome 'portable') -PathType Container) { $detectedParts += [pscustomobject]@{ Id = 2; Label = 'FVCodex portable and shortcuts' } }
+if ($hasDirectPatch) { $detectedParts += [pscustomobject]@{ Id = 3; Label = 'Direct MSIX patch (restore original app)' } }
+if ($hasVsCodePatch) { $detectedParts += [pscustomobject]@{ Id = 4; Label = ('VS Code Codex patch (' + $vsCodeBackupFiles.Count + ' backup files)') } }
+if (Test-Path -LiteralPath $oaicConfigPath -PathType Leaf) { $detectedParts += [pscustomobject]@{ Id = 5; Label = 'Shared OAIC config' } }
+if ($hasIsolatedFVCodex) { $detectedParts += [pscustomobject]@{ Id = 6; Label = 'FVCodex isolated profile/history/config' } }
 
-if ($hasDirectPatch -and -not (Test-Admin)) {
+if ($detectedParts.Count -eq 0) {
+    Write-Host 'No installed or patched components were detected.'
+    exit 0
+}
+
+$selectedParts = @(Read-SelectedUninstallParts -Parts $detectedParts)
+if ($selectedParts.Count -eq 0) { Write-Host 'Cancelled.'; exit 0 }
+$makeBackup = Read-BackupChoice
+$backupRoot = $null
+if ($makeBackup) {
+    $backupRoot = Join-Path $env:LOCALAPPDATA ('CodexUninstallBackups\' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    [void](New-Item -ItemType Directory -Path $backupRoot -Force)
+    Write-Host ('Safety backup directory: ' + $backupRoot) -ForegroundColor Cyan
+}
+
+if (@($selectedParts.Id | Where-Object { $_ -in @(1, 2, 3, 4, 6) }).Count -gt 0) { Stop-CodexBeforeUninstall }
+
+if (($selectedParts.Id -contains 3) -and $hasDirectPatch -and -not (Test-Admin)) {
     Write-Host 'Direct FVCodex patch detected. Administrator permission is required to restore the original MSIX.' -ForegroundColor Yellow
-    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Selection "{1}"' -f $PSCommandPath, ($selectedParts.Id -join ',')
     if ($DeleteConfig) { $argLine += ' -DeleteConfig' }
+    if ($makeBackup) { $argLine += ' -Backup' }
     $proc = Start-Process powershell.exe -Verb RunAs -ArgumentList $argLine -Wait -PassThru
     exit $proc.ExitCode
 }
 
-if ($hasDirectPatch) {
+if ($hasDirectPatch -and ($selectedParts.Id -contains 3)) {
     Write-Host ''
     Write-Host 'Direct FVCodex patch detected. Restoring original app.asar and ChatGPT.exe...' -ForegroundColor Cyan
     if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
         throw "FVCodex patch script is missing: $fvcodexScript"
+    }
+    if ($makeBackup) {
+        $directState = Get-Content -LiteralPath $directStatePath -Raw | ConvertFrom-Json
+        [void](Save-UninstallCopy -Path ([string]$directState.asarPath) -Root $backupRoot -RelativePath 'direct\app.asar.current')
+        [void](Save-UninstallCopy -Path ([string]$directState.exePath) -Root $backupRoot -RelativePath ('direct\' + [string]$directState.exeName))
     }
     & node $fvcodexScript "--root=$scriptDirectory" '--direct-restore'
     if ($LASTEXITCODE -ne 0) {
@@ -199,16 +270,11 @@ if ($hasDirectPatch) {
     }
 }
 
-$oaicConfigPath = Join-Path $env:APPDATA 'oaic-usage\config.json'
 $removeOaicConfig = $false
-if ((Test-Path -LiteralPath $oaicConfigPath -PathType Leaf) -and ($hasInstallState -or $hasVsCodePatch -or $hasPortableFVCodex -or $hasDirectPatch)) {
-    if ($DeleteConfig) {
-        $removeOaicConfig = $true
-    }
-    else {
-        $configChoice = Read-Host 'Remove the shared OAIC configuration as well? [y/N]'
-        $removeOaicConfig = $configChoice -match '^(y|yes)$'
-    }
+if (($selectedParts.Id -contains 5) -and (Test-Path -LiteralPath $oaicConfigPath -PathType Leaf)) {
+    $removeOaicConfig = $true
+
+    if ($makeBackup) { [void](Save-UninstallCopy -Path $oaicConfigPath -Root $backupRoot -RelativePath 'oaic\shared-config.json') }
 
     if ($removeOaicConfig) {
         Remove-Item -LiteralPath $oaicConfigPath -Force
@@ -223,38 +289,44 @@ if ((Test-Path -LiteralPath $oaicConfigPath -PathType Leaf) -and ($hasInstallSta
     }
 }
 
-if ($hasVsCodePatch -or $hasPortableFVCodex) {
+if (($hasVsCodePatch -and ($selectedParts.Id -contains 4)) -or ($hasPortableFVCodex -and ($selectedParts.Id -contains 2))) {
     Write-Host ''
     Write-Host 'Detected FVCodex-related installation:' -ForegroundColor Cyan
     if ($hasVsCodePatch) { Write-Host ('  VS Code patched files: ' + $vsCodeBackupFiles.Count) }
     if ($hasPortableFVCodex) { Write-Host ('  FVCodex portable: ' + $fvcodexHome) }
 
-    if ($hasVsCodePatch) {
-        $restoreVsCode = Read-Host 'Remove the VS Code Codex extension patch and restore original files? [Y/n]'
-        if ($restoreVsCode -match '^(|y|yes)$') {
-            if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
-                throw "FVCodex patch script is missing: $fvcodexScript"
+    if ($hasVsCodePatch -and ($selectedParts.Id -contains 4)) {
+        if ($makeBackup) {
+            foreach ($backupFile in $vsCodeBackupFiles) {
+                [void](Save-UninstallCopy -Path $backupFile.FullName -Root $backupRoot -RelativePath ('vscode\' + $backupFile.Name))
             }
-            & node $fvcodexScript "--root=$scriptDirectory" '--vscode-restore'
-            if ($LASTEXITCODE -ne 0) { throw "VS Code restore failed with exit code $LASTEXITCODE." }
         }
+        if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
+            throw "FVCodex patch script is missing: $fvcodexScript"
+        }
+        & node $fvcodexScript "--root=$scriptDirectory" '--vscode-restore'
+        if ($LASTEXITCODE -ne 0) { throw "VS Code restore failed with exit code $LASTEXITCODE." }
     }
 
-    if ($hasPortableFVCodex) {
-        $removeFVCodex = Read-Host 'Uninstall FVCodex portable and remove its shortcuts? [Y/n]'
-        if ($removeFVCodex -match '^(|y|yes)$') {
-            if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
-                throw "FVCodex patch script is missing: $fvcodexScript"
-            }
-            & node $fvcodexScript "--root=$scriptDirectory" '--portable-remove'
-            if ($LASTEXITCODE -ne 0) { throw "FVCodex portable removal failed with exit code $LASTEXITCODE." }
+    if ($hasPortableFVCodex -and ($selectedParts.Id -contains 2)) {
+        if ($makeBackup) { [void](Save-UninstallCopy -Path (Join-Path $fvcodexHome 'portable') -Root $backupRoot -RelativePath 'FVCodex\portable') }
+        if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) {
+            throw "FVCodex patch script is missing: $fvcodexScript"
         }
+        & node $fvcodexScript "--root=$scriptDirectory" '--portable-remove'
+        if ($LASTEXITCODE -ne 0) { throw "FVCodex portable removal failed with exit code $LASTEXITCODE." }
     }
 }
 
-if (-not $hasInstallState) {
-    Reset-CodexToNativeAccount -Path (Join-Path $codexHome 'config.toml')
-    Write-Host "Nothing else to uninstall: install state not found at $statePath"
+if ($hasIsolatedFVCodex -and ($selectedParts.Id -contains 6)) {
+    if ($makeBackup) { [void](Save-UninstallCopy -Path (Join-Path $fvcodexHome 'profile') -Root $backupRoot -RelativePath 'FVCodex\profile') }
+    if (-not (Test-Path -LiteralPath $fvcodexScript -PathType Leaf)) { throw "FVCodex patch script is missing: $fvcodexScript" }
+    & node $fvcodexScript "--root=$scriptDirectory" '--profile-remove'
+    if ($LASTEXITCODE -ne 0) { throw "FVCodex profile removal failed with exit code $LASTEXITCODE." }
+}
+
+if (-not $hasInstallState -or -not ($selectedParts.Id -contains 1)) {
+    Write-Host "Codex config backup was not selected or install state was not found."
     exit 0
 }
 
@@ -299,13 +371,17 @@ if ([bool]$state.catalogExisted -and -not (Test-Path -LiteralPath $catalogBackup
 }
 
 $safetyCopies = New-Object 'System.Collections.Generic.List[string]'
-if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+if ($makeBackup -and ($selectedParts.Id -contains 1)) {
+    [void](Save-UninstallCopy -Path $configPath -Root $backupRoot -RelativePath 'codex\config.toml.current')
+    [void](Save-UninstallCopy -Path $targetCatalogPath -Root $backupRoot -RelativePath ('codex\' + $targetCatalogName + '.current'))
+}
+if ($makeBackup -and (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     $installedHash = [string]$state.installedConfigSha256
     if (-not [string]::IsNullOrWhiteSpace($installedHash) -and (Get-Sha256 -Path $configPath) -ne $installedHash) {
         [void]$safetyCopies.Add((Save-ChangedFile -Path $configPath -Label 'config_changed'))
     }
 }
-if (Test-Path -LiteralPath $targetCatalogPath -PathType Leaf) {
+if ($makeBackup -and (Test-Path -LiteralPath $targetCatalogPath -PathType Leaf)) {
     $installedHash = [string]$state.installedCatalogSha256
     if (-not [string]::IsNullOrWhiteSpace($installedHash) -and (Get-Sha256 -Path $targetCatalogPath) -ne $installedHash) {
         [void]$safetyCopies.Add((Save-ChangedFile -Path $targetCatalogPath -Label 'catalog_changed'))
@@ -347,10 +423,9 @@ Broadcast-EnvironmentChange
 Remove-Item -LiteralPath $backupDirectory -Recurse -Force
 Remove-Item -LiteralPath $statePath -Force
 
-Reset-CodexToNativeAccount -Path $configPath
-
 Write-Host ''
 Write-Host 'Codex custom endpoint installation was removed and the original state was restored.'
+if ($makeBackup) { Write-Host ('Safety backup saved to: ' + $backupRoot) }
 if ($safetyCopies.Count -gt 0) {
     Write-Host 'Files changed after installation were saved before restoration:'
     foreach ($safetyCopy in $safetyCopies) {
