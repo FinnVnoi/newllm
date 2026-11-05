@@ -247,6 +247,13 @@ const APP_PATCHES = [
     new: 'aN=oN||null!=ax&&"ready"!==ax.status||au||oO||o8/*FVC2*/',
     reapply: true,
     desc: 'composer submitDisabled rate-limit gate'
+  },
+  {
+    path: /\/assets\/async\/207329\.[0-9a-f]+\.js$/,
+    old: 'aL=null!=aU||aR',
+    new: 'aL=!1/*FVC3*/  ',
+    reapply: true,
+    desc: 'composer model-limit submit gate'
   }
 ];
 
