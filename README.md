@@ -100,6 +100,18 @@ powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1
 
 This creates a patched copy under `%LOCALAPPDATA%\FVCodex\portable` and creates the shortcut **FVCodex**. The installer asks whether VS Code should be patched; choosing No leaves VS Code untouched. The portable copy is rebuilt from the current installed MSIX version, so running the installer again after a Codex update refreshes it.
 
+The installer records its own installer version, the source Codex version, and the detected components in `%APPDATA%\FVCodex\install-state.json`. After the language selection, it scans for an existing installation. If one is found, it shows the installed components and offers:
+
+- **Reinstall**: rebuild/reset the selected installation from the current Codex MSIX.
+- **Update**: keep the installation flow, refresh FVCodex from the current source, and allow the endpoint, API key, model, reasoning effort, profile, and VS Code choice to be changed.
+
+The same actions can be selected non-interactively with `-Update` or `-Reinstall`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -Update -NoLaunch
+powershell -ExecutionPolicy Bypass -File .\install-fvcodex.ps1 -Reinstall -NoLaunch
+```
+
 For account mode, the installer also asks whether FVCodex should share or isolate its profile:
 
 - `shared`: uses the normal Codex configuration/history locations and the shared OAIC file.

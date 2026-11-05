@@ -10,6 +10,7 @@ const cp = require('child_process');
 const crypto = require('crypto');
 
 const args = process.argv.slice(2);
+const INSTALLER_VERSION = '2.1.0';
 function has(name) { return args.indexOf('--' + name) >= 0; }
 function arg(name, def) {
   const pre = '--' + name + '=';
@@ -41,8 +42,11 @@ const SHOP = String(arg('shop', 'https://finnvnoi.top/shop/quota.php'));
 const API_KEY = String(arg('api-key', '') || '').trim();
 const MODEL_ARG = String(arg('model', '') || '').trim();
 const EFFORT_ARG = String(arg('effort', '') || '').trim();
+const INSTALLER_VERSION_ARG = String(arg('installer-version', '') || '').trim();
+const INSTALL_ACTION_ARG = String(arg('install-action', 'install') || 'install').trim();
 const SHORTCUT_NAME = String(arg('shortcut', 'FVCodex'));
 const SELECTION_ARG = String(arg('selection', '') || '').trim();
+const INSTALL_ACTION = has('reinstall') ? 'reinstall' : (has('update') ? 'update' : 'install');
 const CATALOG_NAME = 'legacy_direct_model_catalog.json';
 
 const APP_DATA = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -526,6 +530,12 @@ function codexHome() {
   const env = String(process.env.CODEX_HOME || '').trim();
   if (env) return path.resolve(env);
   return path.join(os.homedir(), '.codex');
+}
+
+function sourceVersion(msixDir) {
+  const name = path.basename(String(msixDir || ''));
+  const m = name.match(/Codex_(\d+(?:\.\d+)*)_/i);
+  return m ? m[1] : 'unknown';
 }
 
 function tomlStr(s) {
@@ -1060,6 +1070,8 @@ function install() {
   if (!NO_VSCODE) vs = patchVsCode();
 
   saveInstallState({
+    installerVersion: INSTALLER_VERSION_ARG || INSTALLER_VERSION,
+    installAction: INSTALL_ACTION_ARG,
     mode: MODE,
     profile: ISOLATED_PROFILE ? 'isolated' : 'shared',
     configMode: CONFIG_MODE,
@@ -1073,6 +1085,13 @@ function install() {
     model: resolveModel(),
     effort: resolveEffort(),
     apiKeyConfigured: !!resolveKey()
+    ,sourceVersion: sourceVersion(msixDir),
+    components: [
+      MODE === 'portable' ? 'portable-desktop' : 'direct-msix',
+      ISOLATED_PROFILE ? 'isolated-profile' : 'shared-profile',
+      !NO_VSCODE ? 'vscode-patch' : null,
+      CONFIG_MODE === 'account' ? 'account-config' : 'custom-endpoint-config'
+    ].filter(Boolean)
   });
 
   log('');
