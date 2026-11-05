@@ -180,6 +180,15 @@ function patchExeHash(asarPath, exePath, originalHashHex) {
   let idx = -1;
   if (originalHashHex) idx = exe.indexOf(Buffer.from(originalHashHex, 'ascii'));
   if (idx < 0) idx = exe.indexOf(Buffer.from(asarHeaderHash(asarPath), 'ascii'));
+  if (idx < 0) {
+    // Fallback: the embedded asar hash is the last SHA-256 hex string in the shell exe.
+    const text = exe.toString('ascii');
+    const re = /[0-9a-f]{64}/g;
+    let m = null;
+    let last = null;
+    while ((m = re.exec(text)) !== null) last = m;
+    if (last && last.index > exe.length - 524288) idx = last.index;
+  }
   if (idx < 0) throw new Error('khong tim thay header hash trong ' + EXE_NAME);
   const current = exe.slice(idx, idx + 64).toString('ascii');
   if (!/^[0-9a-f]{64}$/.test(current)) throw new Error('offset hash khong hop le: ' + idx);
@@ -254,6 +263,20 @@ const APP_PATCHES = [
     new: 'aL=!1/*FVC3*/  ',
     reapply: true,
     desc: 'composer model-limit submit gate'
+  },
+  {
+    path: /\/assets\/async\/589850\.[0-9a-f]+\.js$/,
+    old: 'gD=gL||sj||sT',
+    new: 'gD=gL/*FVC4*/',
+    reapply: true,
+    desc: 'codex composer policy-blocking submit gate'
+  },
+  {
+    path: /\/assets\/async\/589850\.[0-9a-f]+\.js$/,
+    old: 'gL=iO||null!=uO||sF||mZ||g_&&sz?.type!=="local"',
+    new: 'gL=!1/*FVC5*/',
+    reapply: true,
+    desc: 'codex composer submit readiness gate'
   }
 ];
 
@@ -1228,10 +1251,11 @@ function patchAsarOnly() {
     if (!fs.existsSync(asarPath)) continue;
     let n = 0;
     try {
+      const originalHash = asarHeaderHash(asarPath);
       n = asarNeedles(asarPath, APP_PATCHES);
       if (n) {
         const exePath = findAppExe(path.dirname(path.dirname(asarPath)));
-        if (exePath) patchExeHash(asarPath, exePath);
+        if (exePath) patchExeHash(asarPath, exePath, originalHash);
       }
     } catch (e) {
       warn('khong patch duoc ' + asarPath + ': ' + (e && e.code === 'EPERM' ? 'EPERM (MSIX trong WindowsApps can quyen admin)' : (e && e.message || e)));
