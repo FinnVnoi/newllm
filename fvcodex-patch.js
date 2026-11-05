@@ -240,6 +240,13 @@ const APP_PATCHES = [
     new: 'if(!1)return t5(!1),!1;',
     reapply: true,
     desc: 'guard submit'
+  },
+  {
+    path: /\/assets\/async\/207329\.[0-9a-f]+\.js$/,
+    old: 'aN=oN||null!=ax&&"ready"!==ax.status||au||oO||oQ||ii||o8',
+    new: 'aN=oN||null!=ax&&"ready"!==ax.status||au||oO||o8/*FVC2*/',
+    reapply: true,
+    desc: 'composer submitDisabled rate-limit gate'
   }
 ];
 
