@@ -97,6 +97,7 @@ function hashBlocks(content, bs) {
 function asarNeedles(asarPath, patches) {
   const buf = fs.readFileSync(asarPath);
   const h = asarRead(buf);
+  const applied = [];
   let changed = 0;
   walkLeaves(h.obj, '', function (entry, filePath) {
     if (typeof entry.size !== 'number' || entry.unpacked || !entry.integrity) return;
@@ -117,7 +118,7 @@ function asarNeedles(asarPath, patches) {
       entry.integrity.blocks = hashBlocks(next, bs);
       entry.integrity.hash = crypto.createHash('sha256').update(next).digest('hex');
       changed++;
-      ok('patch ' + filePath + ' (' + p.desc + ')');
+      applied.push('patch ' + filePath + ' (' + p.desc + ')');
     }
   });
   if (changed) {
@@ -126,7 +127,9 @@ function asarNeedles(asarPath, patches) {
       throw new Error('header length changed (' + h.jsonLen + ' -> ' + Buffer.byteLength(newJson) + ')');
     }
     buf.write(newJson, 16, 'utf8');
+    // Write first: only report patches that actually reached disk.
     fs.writeFileSync(asarPath, buf);
+    for (let i = 0; i < applied.length; i++) ok(applied[i]);
   }
   return changed;
 }
@@ -1258,7 +1261,8 @@ function patchAsarOnly() {
         if (exePath) patchExeHash(asarPath, exePath, originalHash);
       }
     } catch (e) {
-      warn('khong patch duoc ' + asarPath + ': ' + (e && e.code === 'EPERM' ? 'EPERM (MSIX trong WindowsApps can quyen admin)' : (e && e.message || e)));
+      const why = (e && e.code === 'EPERM') ? 'EPERM (MSIX trong WindowsApps can quyen admin)' : (e && e.message || e);
+      warn('bo qua ' + asarPath + ' (khong ghi duoc, file giu nguyen): ' + why);
       continue;
     }
     if (n) {
