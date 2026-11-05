@@ -1229,6 +1229,10 @@ function patchAsarOnly() {
     let n = 0;
     try {
       n = asarNeedles(asarPath, APP_PATCHES);
+      if (n) {
+        const exePath = findAppExe(path.dirname(path.dirname(asarPath)));
+        if (exePath) patchExeHash(asarPath, exePath);
+      }
     } catch (e) {
       warn('khong patch duoc ' + asarPath + ': ' + (e && e.code === 'EPERM' ? 'EPERM (MSIX trong WindowsApps can quyen admin)' : (e && e.message || e)));
       continue;
