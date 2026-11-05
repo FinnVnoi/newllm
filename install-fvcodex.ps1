@@ -126,6 +126,13 @@ if (-not $ApiKey) {
     if ($savedApiKey) { $ApiKey = $savedApiKey }
 }
 
+function ConvertTo-EndpointDisplay([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return 'https://codex.finnvnoi.top/backend-api/codex' }
+    $trimmed = $Value.Trim().TrimEnd('/')
+    if ($trimmed -match '/backend-api/codex$') { return $trimmed }
+    return $trimmed + '/backend-api/codex'
+}
+
 function Test-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -158,8 +165,9 @@ if ($NoVSCode) { $common += '--no-vscode' }
 if ($Doctor) { $common += '--doctor' }
 
 if (-not $Doctor -and -not $NonInteractive) {
-    $baseDefault = if ($BaseUrl) { $BaseUrl } else { 'https://codex.finnvnoi.top' }
-    $baseInput = Read-Host "Base URL [$baseDefault]"
+    $baseDefault = ConvertTo-EndpointDisplay $BaseUrl
+    Write-Host 'The endpoint path is included. You may enter a full custom endpoint URL.' -ForegroundColor DarkGray
+    $baseInput = Read-Host "Endpoint URL [$baseDefault]"
     if ($baseInput) { $BaseUrl = $baseInput } else { $BaseUrl = $baseDefault }
     $keyInput = Read-Host ('API key' + $(if ($ApiKey) { ' [press Enter to keep existing]' } else { '' }))
     if ($keyInput) { $ApiKey = $keyInput }
