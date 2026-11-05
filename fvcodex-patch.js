@@ -769,6 +769,7 @@ const VS_PATCHES = [
   {
     file: /^chatgpt-conversation-queries-.*\.js$/,
     pairs: [['sendBlockReason:d?.block_reason??null,sendBlocked:d!=null', 'sendBlockReason:null,sendBlocked:!1']],
+    regex: [/sendBlockReason:[A-Za-z_$][\w$]*\?\.block_reason\?\?null,sendBlocked:[A-Za-z_$][\w$]*!=null/, 'sendBlockReason:null,sendBlocked:!1'],
     desc: 'state rate-limit'
   },
   {
@@ -776,6 +777,24 @@ const VS_PATCHES = [
     pairs: [['if(n.sendBlocked)return k(!1),!1;', 'if(!1)return k(!1),!1;']],
     regex: [/if\(([A-Za-z_$][\w$]*)\.sendBlocked\)return/, 'if(!1)return'],
     desc: 'guard submit'
+  },
+  {
+    file: /^usage-send-blocked-.*\.js$/,
+    pairs: [
+      ['t.authMethod!==`chatgpt`||', '!0||'],
+      ['authMethod!==`chatgpt`||', 'authMethod!==`chatgpt`||!0||']
+    ],
+    regex: [/authMethod!==`chatgpt`\|\|/, 'authMethod!==`chatgpt`||!0||'],
+    desc: 'usage-send-blocked atom khong bao gio chan'
+  },
+  {
+    file: /^chatgpt-composer-adapter-.*\.js$/,
+    pairs: [
+      ['sendBlocked:s', 'sendBlocked:!1'],
+      ['s=i.hardBlocked||o', 's=i.hardBlocked||!1']
+    ],
+    regex: [/([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.hardBlocked\|\|([A-Za-z_$][\w$]*)[,;}]/, '$1=$2.hardBlocked||!1$3'],
+    desc: 'adapter sendBlocked luon cho phep gui'
   },
   {
     file: /^codex-composer-adapter-.*\.js$/,
