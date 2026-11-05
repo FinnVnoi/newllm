@@ -444,7 +444,78 @@ function shortcutPaths() {
   return out;
 }
 
-function makeShortcut(lnk, target, argString, workDir, icon) {
+// FV_AUMID gives FVCodex its own AppUserModelID. Without it the shortcut
+// inherits the AppID of whatever else points at the same target (the stock
+// Codex shortcut claims com.openai.codex for ChatGPT.exe), and the Start Menu
+// silently drops the duplicate instead of showing a second entry.
+const FV_AUMID = 'com.fvcodex.app';
+const AUMID_FMTID = '9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3';
+
+const AUMID_CSHARP = [
+  'using System;',
+  'using System.Runtime.InteropServices;',
+  '',
+  'public static class LnkProps',
+  '{',
+  '    [StructLayout(LayoutKind.Sequential, Pack = 4)]',
+  '    public struct PROPERTYKEY { public Guid fmtid; public int pid; }',
+  '',
+  '    [StructLayout(LayoutKind.Sequential)]',
+  '    public struct PROPVARIANT',
+  '    {',
+  '        public ushort vt; public ushort r1; public ushort r2; public ushort r3;',
+  '        public IntPtr p; public int p2;',
+  '    }',
+  '',
+  '    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]',
+  '    private interface IPropertyStore',
+  '    {',
+  '        void GetCount(out uint cProps);',
+  '        void GetAt(uint iProp, out PROPERTYKEY pkey);',
+  '        void GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);',
+  '        void SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);',
+  '        void Commit();',
+  '    }',
+  '',
+  '    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]',
+  '    private static extern void SHGetPropertyStoreFromParsingName(',
+  '        string pszPath, IntPtr pbc, int flags, ref Guid riid,',
+  '        [MarshalAs(UnmanagedType.Interface)] out IPropertyStore ppv);',
+  '',
+  '    public static void SetString(string path, Guid fmtid, int pid, string value)',
+  '    {',
+  '        Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");',
+  '        IPropertyStore store;',
+  '        SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 2, ref iid, out store);',
+  '        PROPERTYKEY key; key.fmtid = fmtid; key.pid = pid;',
+  '        PROPVARIANT pv = new PROPVARIANT();',
+  '        pv.vt = 31;',
+  '        pv.p = Marshal.StringToCoTaskMemUni(value);',
+  '        store.SetValue(ref key, ref pv);',
+  '        store.Commit();',
+  '        Marshal.FreeCoTaskMem(pv.p);',
+  '        Marshal.ReleaseComObject(store);',
+  '    }',
+  '}'
+].join('\r\n');
+
+function setShortcutAumid(lnk, aumid) {
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "if (-not ('LnkProps' -as [type])) { Add-Type -Language CSharp @'",
+    AUMID_CSHARP,
+    "'@ }",
+    "[LnkProps]::SetString('" + psEscape(lnk) + "',[Guid]'" + AUMID_FMTID + "',5,'" + psEscape(aumid) + "')"
+  ].join('\r\n');
+  const r = runPS(script);
+  if (r.code !== 0) {
+    warn('khong dat duoc AppUserModelID cho ' + lnk + ': ' + (r.err || r.out));
+    return false;
+  }
+  return true;
+}
+
+function makeShortcut(lnk, target, argString, workDir, icon, aumid) {
   const script = [
     "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + psEscape(lnk) + "');",
     "$s.TargetPath='" + psEscape(target) + "';",
@@ -455,8 +526,9 @@ function makeShortcut(lnk, target, argString, workDir, icon) {
     '$s.Save();'
   ].join('');
   const r = runPS(script);
-  if (r.code !== 0) warn('khong tao duoc shortcut ' + lnk + ': ' + (r.err || r.out));
-  else ok('shortcut: ' + lnk);
+  if (r.code !== 0) { warn('khong tao duoc shortcut ' + lnk + ': ' + (r.err || r.out)); return; }
+  if (aumid) setShortcutAumid(lnk, aumid);
+  ok('shortcut: ' + lnk);
 }
 
 function removeShortcuts() {
@@ -497,13 +569,13 @@ function createPortableShortcut(exePath) {
     fs.writeFileSync(launcher, ps, 'utf8');
     shortcutPaths().forEach(function (lnk) {
       if (fs.existsSync(lnk)) { try { fs.unlinkSync(lnk); } catch (e) { /* ignore */ } }
-      makeShortcut(lnk, process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + launcher + '"', PROFILE_HOME, exePath);
+      makeShortcut(lnk, process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + launcher + '"', PROFILE_HOME, exePath, FV_AUMID);
     });
     return;
   }
   shortcutPaths().forEach(function (lnk) {
     if (fs.existsSync(lnk)) { try { fs.unlinkSync(lnk); } catch (e) { /* ignore */ } }
-    makeShortcut(lnk, exePath, '', path.dirname(exePath), exePath);
+    makeShortcut(lnk, exePath, '', path.dirname(exePath), exePath, FV_AUMID);
   });
 }
 
