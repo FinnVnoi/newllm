@@ -215,6 +215,27 @@ const APP_PATCHES = [
     new: 'let Ti=!1,',
     reapply: true,
     desc: 'submitDisabled OR-gate'
+  },
+  {
+    path: /\/assets\/async\/589850\.[0-9a-f]+\.js$/,
+    old: 'c="local"===w&&P||(0,tP.is)(T,f)',
+    new: 'c=!1/*FVC1*/',
+    reapply: true,
+    desc: 'composer sendBlocked selector'
+  },
+  {
+    path: /\/assets\/async\/24191\.[0-9a-f]+\.js$/,
+    old: 'sendBlockReason:m?.block_reason??null,sendBlocked:null!=m',
+    new: 'sendBlockReason:null,sendBlocked:!1',
+    reapply: true,
+    desc: 'state rate-limit (queries)'
+  },
+  {
+    path: /\/assets\/async\/638132\.[0-9a-f]+\.js$/,
+    old: 'if(n.sendBlocked)return t5(!1),!1;',
+    new: 'if(!1)return t5(!1),!1;',
+    reapply: true,
+    desc: 'guard submit'
   }
 ];
 
@@ -1158,6 +1179,37 @@ function patchVsCodeOnly() {
   return 0;
 }
 
+function patchAsarOnly() {
+  const asarCandidates = [
+    path.join(FV_HOME, 'portable', 'app', 'resources', 'app.asar')
+  ];
+  const direct = readDirectState();
+  if (direct && direct.asarPath) asarCandidates.push(direct.asarPath);
+  const msix = findMsixApp();
+  if (msix) {
+    const p = path.join(msix, 'app', 'resources', 'app.asar');
+    if (fs.existsSync(p)) asarCandidates.push(p);
+  }
+  let total = 0;
+  for (const asarPath of asarCandidates) {
+    if (!fs.existsSync(asarPath)) continue;
+    let n = 0;
+    try {
+      n = asarNeedles(asarPath, APP_PATCHES);
+    } catch (e) {
+      warn('khong patch duoc ' + asarPath + ': ' + (e && e.code === 'EPERM' ? 'EPERM (MSIX trong WindowsApps can quyen admin)' : (e && e.message || e)));
+      continue;
+    }
+    if (n) {
+      ok('desktop asar patched: ' + asarPath + ' (' + n + ')');
+      total += n;
+    } else {
+      info('desktop asar no change: ' + asarPath);
+    }
+  }
+  return total;
+}
+
 function main() {
   if (DOCTOR) return doctor();
   if (UNINSTALL) return uninstall();
@@ -1165,6 +1217,11 @@ function main() {
   if (CONFIG_ONLY) return configure();
   if (VSCODE_PATCH_ONLY) return patchVsCodeOnly();
   if (VSCODE_RESTORE_ONLY) return restoreVsCodeOnly();
+  if (has('asar-patch')) {
+    const n = patchAsarOnly();
+    if (!n) log('desktop asar: khong co gi de patch (hoac da patch)');
+    return 0;
+  }
   if (PORTABLE_REMOVE_ONLY) return removePortableOnly();
   if (has('profile-remove')) return removeProfileOnly();
   if (DIRECT_RESTORE_ONLY) return restoreDirectOnly();
